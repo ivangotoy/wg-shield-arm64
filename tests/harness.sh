@@ -2,7 +2,8 @@
 # WG Shield Arm64 - offline test harness (Linux PC, no phone, no root).
 #
 # Runs the module's own scripts inside a private user + network namespace
-# (unshare -rn: uid 0 and CAP_NET_ADMIN there, nothing outside is touched).
+# (unshare -n --map-auto, else -rn: uid 0 and CAP_NET_ADMIN there, nothing
+# outside is touched).
 # netd is imitated with its rules (16000 explicit network, 31000 default
 # network) and a table per network; the tunnel link is a veth
 # (WGS_LINKTYPE), the handshake comes from $STATE/fake_hs. Android tools
@@ -11,6 +12,8 @@
 #   bash tests/harness.sh            run every case
 #   bash tests/harness.sh -k NAME    run the cases whose name contains NAME
 #   WGS_TEST_BB=/path/busybox bash tests/harness.sh   the same with busybox ash
+#   WGS_TEST_SH=/path/mksh bash tests/harness.sh      the same with mksh (the
+#                                     WebUI's shell; host tools for applets)
 #
 # Scratch goes to tests/.run (ext4 next to the repo), removed at the start.
 set -u
@@ -18,6 +21,11 @@ REPO=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
 if [ "${WGS_IN_NS:-}" != 1 ]; then
     command -v unshare >/dev/null || { echo "unshare (util-linux) is needed"; exit 2; }
     command -v ip >/dev/null || { echo "ip (iproute2) is needed"; exit 2; }
+    # --map-auto maps the subuid range too: netd-style uidrange rules (5014)
+    # need the uids to exist in the namespace; without it they are refused
+    if unshare -n --map-auto --map-root-user true 2>/dev/null; then
+        exec env WGS_IN_NS=1 WGS_UIDS=1 unshare -n --map-auto --map-root-user bash "$0" "$@"
+    fi
     exec env WGS_IN_NS=1 unshare -rn bash "$0" "$@"
 fi
 FILTER=""; [ "${1:-}" = -k ] && FILTER=${2:-}
@@ -25,6 +33,7 @@ FILTER=""; [ "${1:-}" = -k ] && FILTER=${2:-}
 # applets (unzip, gzip, ...) like KernelSU does; default: bash + host tools
 TSH=$(command -v bash)
 [ -n "${WGS_TEST_BB:-}" ] && TSH="$WGS_TEST_BB sh"
+[ -n "${WGS_TEST_SH:-}" ] && TSH=$WGS_TEST_SH
 
 RUN="$REPO/tests/.run"
 rm -rf "$RUN"; mkdir -p "$RUN"
@@ -35,11 +44,13 @@ cat > "$FAKES/getprop" <<'EOF'
 #!/bin/sh
 case "$1" in sys.boot_completed) echo 1 ;; debug.tracing.screen_state) echo 2 ;; esac
 EOF
-cat > "$FAKES/dumpsys" <<'EOF'
+# dumpsys connectivity: one line per network in $RUN/networks ("<netId> <caps>")
+cat > "$FAKES/dumpsys" <<EOF
 #!/bin/sh
-[ "$1" = connectivity ] && echo "  NetworkAgentInfo{network{100}  handle{1}  ni{WIFI CONNECTED} Capabilities: INTERNET&NOT_RESTRICTED&TRUSTED&VALIDATED}"
-exit 0
+[ "\$1" = connectivity ] || exit 0
+while read -r n c; do echo "  NetworkAgentInfo{network{\$n}  handle{1}  ni{X CONNECTED}  nc{[ Transports: WIFI Capabilities: \$c LinkUpBandwidth>=1Kbps ]}"; done < "$RUN/networks"
 EOF
+echo "100 INTERNET&NOT_RESTRICTED&TRUSTED&VALIDATED" > "$RUN/networks"
 printf '#!/bin/sh\necho "package:com.android.captiveportallogin uid:10050"\n' > "$FAKES/pm"
 printf '#!/bin/sh\nexit 1\n' > "$FAKES/ping"
 printf '#!/bin/sh\nexit 0\n' > "$FAKES/su"
@@ -57,7 +68,7 @@ export WGS_IP="$(command -v ip)" WGS_BB="${WGS_TEST_BB:-$RUN/no-busybox}" WGS_RT
 export WGS_GETPROP="$FAKES/getprop" WGS_DUMPSYS="$FAKES/dumpsys" WGS_PM="$FAKES/pm"
 export WGS_PING="$FAKES/ping" WGS_SU="$FAKES/su" WGS_CMD="$FAKES/cmd"
 export WGS_LINKTYPE=veth WGS_PROC6="$RUN/proc6" WGS_SYSNET="$RUN/sysnet"
-export WGS_SH="$TSH"
+export WGS_SH="$TSH" WGS_HEAL_WAIT=1
 STATE="$WGS_DATA/state"
 mkdir -p "$WGS_MODULES" "$WGS_DL" "$WGS_PROC6/all"
 echo 1 > "$WGS_PROC6/all/disable_ipv6"          # no IPv6 on the fake phone
@@ -216,6 +227,155 @@ if want backup; then
     out=$(ctl restore)
     check "restore imported" 2 "$(echo "$out" | kv imported)"
     check "restore favorites" 1 "$(echo "$out" | kv favorites)"
+fi
+
+# tick until the status key has the value (at most N ticks, 1.1 s apart)
+tick_until() {  # tick_until KEY VALUE N
+    _n=0
+    while [ "$_n" -lt "$3" ]; do
+        ctl status >/dev/null 2>&1
+        [ "$(st "$1")" = "$2" ] && return 0
+        sleep 1.1; _n=$((_n + 1))
+    done
+    return 1
+}
+setting() { sed -n "s/^$1=//p" "$WGS_DATA/settings.conf"; }
+
+if want heal; then
+    echo "heal: restarts, then auto-switch skips the failed server address"
+    reset_state
+    conf "$WGS_DL/wg-BG-1.conf" 203.0.113.21:51820
+    conf "$WGS_DL/wg-BG-2.conf" 203.0.113.21:51820     # same server as BG-1
+    conf "$WGS_DL/wg-BG-3.conf" 203.0.113.22:51820
+    conf "$WGS_DL/wg-NL-1.conf" 203.0.113.23:51820
+    for n in wg-BG-1 wg-BG-2 wg-BG-3 wg-NL-1; do ctl import "$n.conf" >/dev/null; done
+    ctl set autoswitch 1 >/dev/null
+    date +%s > "$STATE/fake_hs"
+    ctl up wg-BG-1 >/dev/null
+    check "up" up "$(st state)"
+    echo $(( $(date +%s) - 300 )) > "$STATE/fake_hs"     # last handshake 5 min ago
+    tick_until recover "restart 1/2" 3; check "restart 1" "restart 1/2" "$(st recover)"
+    tick_until recover "restart 2/2" 4; check "restart 2" "restart 2/2" "$(st recover)"
+    tick_until recover "switch wg-BG-3" 4; check "switch to the same country, other address" "switch wg-BG-3" "$(st recover)"
+    check "settings follow the switch" wg-BG-3 "$(setting ACTIVE)"
+    check "kill switch held during recovery" wgs0 "$(route_of)"
+    date +%s > "$STATE/fake_hs"
+    tick_until state up 3; check "up on the new tunnel" up "$(st state)"
+    check "recovery finished" "" "$(st recover)"
+    check "switch notified" 1 "$(grep -c 'notification: wg-BG-1 does not answer.*Switched to wg-BG-3' "$WGS_DATA/logs/wg-shield.log")"
+    echo "heal: nothing helps - back to the picked tunnel, one notification"
+    ctl up wg-NL-1 >/dev/null
+    echo $(( $(date +%s) - 300 )) > "$STATE/fake_hs"
+    tick_until recover failed 14; check "recovery gave up" failed "$(st recover)"
+    check "back on the picked tunnel" wg-NL-1 "$(setting ACTIVE)"
+    check "state down" down "$(st state)"
+    check "kill switch keeps traffic in the dead tunnel" wgs0 "$(route_of)"
+    check "failure notified once" 1 "$(grep -c 'notification: wg-NL-1 does not answer' "$WGS_DATA/logs/wg-shield.log")"
+fi
+
+if want pause; then
+    echo "pause: direct for a while, resume"
+    reset_state
+    conf "$WGS_DL/wg-DE-2.conf" 203.0.113.31:51820
+    ctl import wg-DE-2.conf >/dev/null
+    date +%s > "$STATE/fake_hs"
+    ctl up wg-DE-2 >/dev/null
+    ctl pause 5 >/dev/null
+    check "paused" paused "$(st state)"
+    check "paused = direct" wlan0 "$(route_of)"
+    ctl resume >/dev/null
+    check "resumed" up "$(st state)"
+    check "resumed = tunnel" wgs0 "$(route_of)"
+    ctl remove wg-DE-2 >/dev/null
+    check "removing the active tunnel turns it off" off "$(st state)"
+    check "off = direct" wlan0 "$(route_of)"
+fi
+
+if want networks; then
+    echo "networks: loss of the default network, a second network"
+    reset_state
+    conf "$WGS_DL/wg-FR-1.conf" 203.0.113.41:51820
+    ctl import wg-FR-1.conf >/dev/null
+    date +%s > "$STATE/fake_hs"
+    ctl up wg-FR-1 >/dev/null
+    ip rule del pref 31000; ip rule del pref 16000
+    ctl status >/dev/null
+    check "no network: still captured (not direct)" wgs0 "$(route_of)"
+    check "no network: no wlan0 rules left" 0 "$(ip rule | grep -c 'lookup 1028')"
+    ip rule add pref 16000 fwmark 0x10064/0x1ffff iif lo lookup 1028
+    ip rule add pref 31000 fwmark 0x0/0xffff iif lo lookup 1028
+    ctl status >/dev/null
+    check "network back: tunnel" wgs0 "$(route_of)"
+    # mobile data next to Wi-Fi: netId 101, table 1029
+    ip link add rmnet0 type veth peer name rmnet0p && ip link set rmnet0p up && ip link set rmnet0 up
+    ip addr add 10.64.0.2/24 dev rmnet0
+    ip route add 10.64.0.0/24 dev rmnet0 table 1029
+    ip route add default via 10.64.0.1 dev rmnet0 table 1029
+    echo "1029 rmnet0" >> "$WGS_RT_TABLES"
+    echo "101 INTERNET&NOT_RESTRICTED&TRUSTED&VALIDATED" >> "$RUN/networks"
+    ip rule add pref 16000 fwmark 0x10065/0x1ffff iif lo lookup 1029
+    ctl status >/dev/null
+    dev_of() { ip route get 1.1.1.1 mark "$1" ${2:+uid $2} 2>&1 | sed -n 's/.* dev \([^ ]*\).*/\1/p' | head -n1; }
+    check "socket bound to mobile data -> tunnel" wgs0 "$(dev_of 0x10065)"
+    if [ "${WGS_UIDS:-}" = 1 ]; then
+        check "Android's check on mobile data stays on it" rmnet0 "$(dev_of 0x10065 1073)"
+        check "captive portal app stays on Wi-Fi" wlan0 "$(dev_of 0x10064 10050)"
+    else
+        echo "  skip uid exemptions (no subuid range: unshare --map-auto failed)"
+    fi
+    check "status lists it" 1 "$(st nets | grep -c '1029/tunnel')"
+    [ "$(st nets | grep -c '1029/tunnel')" = 1 ] || echo "    nets=$(st nets)"
+    # an IMS-like restricted network (permission bits 18-19 = SYSTEM): left alone
+    ip rule add pref 16000 fwmark 0xd0066/0xdffff iif lo lookup 1029
+    ctl status >/dev/null
+    check "restricted carrier network not captured" rmnet0 "$(dev_of 0xd0066)"
+    ip rule del pref 16000 fwmark 0xd0066/0xdffff iif lo lookup 1029
+    ip rule del pref 16000 fwmark 0x10065/0x1ffff iif lo lookup 1029
+    ctl status >/dev/null
+    check "its rules go with it" 0 "$(ip rule | grep -c 'fwmark 0x65/0xffff')"
+    sed -i '/^101 /d' "$RUN/networks"
+fi
+
+if want watchdog; then
+    echo "watchdog: service.sh, ip monitor fast capture, restart"
+    reset_state
+    conf "$WGS_DL/wg-IT-1.conf" 203.0.113.51:51820
+    ctl import wg-IT-1.conf >/dev/null
+    date +%s > "$STATE/fake_hs"
+    ctl up wg-IT-1 >/dev/null
+    WGS_FAST=1000 $TSH "$MOD/service.sh" </dev/null >/dev/null 2>&1 &
+    _n=0; while [ ! -s "$STATE/monitor.pid" ] && [ "$_n" -lt 50 ]; do sleep 0.1; _n=$((_n + 1)); done
+    sleep 0.5
+    wd=$(cat "$STATE/watchdog.pid" 2>/dev/null)
+    check "watchdog running" yes "$(kill -0 "$wd" 2>/dev/null && echo yes || echo no)"
+    check "network watch running" yes "$(p=$(cat "$STATE/monitor.pid" 2>/dev/null); [ -n "$p" ] && kill -0 "$p" 2>/dev/null && echo yes || echo no)"
+    echo "102 INTERNET&NOT_RESTRICTED&TRUSTED" >> "$RUN/networks"
+    ip rule add pref 16000 fwmark 0x10066/0x1ffff iif lo lookup 1028
+    _n=0; while ! ip rule | grep -q '^5022:.*fwmark 0x66/0xffff'; do [ "$_n" -ge 30 ] && break; sleep 0.1; _n=$((_n + 1)); done
+    check "new network captured within 3 s" yes "$(ip rule | grep -q '^5022:.*fwmark 0x66/0xffff' && echo yes || echo no)"
+    out=$(ctl restart)
+    check "restart" 1 "$(echo "$out" | kv restarted)"
+    wd2=$(cat "$STATE/watchdog.pid" 2>/dev/null)
+    check "old watchdog gone" no "$(kill -0 "$wd" 2>/dev/null && echo yes || echo no)"
+    check "new watchdog running" yes "$( [ "$wd2" != "$wd" ] && kill -0 "$wd2" 2>/dev/null && echo yes || echo no)"
+    kill "$wd2" 2>/dev/null; sleep 0.5
+    p=$(cat "$STATE/monitor.pid" 2>/dev/null); [ -n "$p" ] && kill "$p" 2>/dev/null
+    ip rule del pref 16000 fwmark 0x10066/0x1ffff iif lo lookup 1028
+    sed -i '/^102 /d' "$RUN/networks"
+fi
+
+if want busybox_path; then
+    echo "busybox_path: KernelSU, APatch and Magisk busybox are found"
+    bbof() { env -u WGS_BB $TSH -c '. "$WGS_MODDIR/sh/common.sh"; echo "$BB"'; }
+    rm -rf "$WGS_ADB/ksu" "$WGS_ADB/ap" "$WGS_ADB/magisk"
+    mkdir -p "$WGS_ADB/magisk"; printf '#!/bin/sh\n' > "$WGS_ADB/magisk/busybox"; chmod 755 "$WGS_ADB/magisk/busybox"
+    check "Magisk only" "$WGS_ADB/magisk/busybox" "$(bbof)"
+    mkdir -p "$WGS_ADB/ap/bin"; cp "$WGS_ADB/magisk/busybox" "$WGS_ADB/ap/bin/busybox"
+    check "APatch before Magisk" "$WGS_ADB/ap/bin/busybox" "$(bbof)"
+    mkdir -p "$WGS_ADB/ksu/bin"; cp "$WGS_ADB/magisk/busybox" "$WGS_ADB/ksu/bin/busybox"
+    check "KernelSU first" "$WGS_ADB/ksu/bin/busybox" "$(bbof)"
+    rm -rf "$WGS_ADB/ksu" "$WGS_ADB/ap" "$WGS_ADB/magisk"
+    check "none: the KernelSU path (as before)" "$WGS_ADB/ksu/bin/busybox" "$(bbof)"
 fi
 
 echo
