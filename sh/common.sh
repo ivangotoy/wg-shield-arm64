@@ -41,7 +41,16 @@ WG="${WGS_WG:-$MODDIR/system/bin/wg}"
 AWG="${WGS_AWG:-$MODDIR/system/bin/awg}"
 # AmneziaWG kernel module (built in or loaded): /sys/module/amneziawg/version
 AWG_SYS="${WGS_AWG_SYS:-/sys/module/amneziawg}"
-BB="${WGS_BB:-/data/adb/ksu/bin/busybox}"
+# busybox of the root manager: KernelSU / SukiSU, APatch, Magisk (the first
+# one present). nslookup and timeout (host-name endpoints) come only from it.
+if [ -n "$WGS_BB" ]; then BB=$WGS_BB
+else
+    BB="$WGS_ADB_DIR/ksu/bin/busybox"
+    for _b in "$WGS_ADB_DIR/ksu/bin/busybox" "$WGS_ADB_DIR/ap/bin/busybox" "$WGS_ADB_DIR/magisk/busybox"; do
+        [ -x "$_b" ] && { BB=$_b; break; }
+    done
+    unset _b
+fi
 GETPROP="${WGS_GETPROP:-/system/bin/getprop}"
 RT_TABLES="${WGS_RT_TABLES:-/data/misc/net/rt_tables}"
 
