@@ -1,6 +1,6 @@
 id=wg-shield
 name=WG Shield Arm64
-version=2.6
+version=2.6-fork1
 versionCode=12
 author=Tears Burn
 description=Always-on kernel WireGuard / AmneziaWG tunnel without an app, with kill switch. Status: Init
