@@ -194,7 +194,7 @@ internet
 | `  logs/wg-shield.log` | Log |
 | `  state/` | Runtime state, cleared at boot; `status` is read by the sibling modules |
 | `/storage/emulated/0/wg-shield/wg-shield-backup.zip` | The backup (WebUI **Backup**): one `.conf` per tunnel, `favorites.txt`, `backup-info.txt`. Kept when the module is removed. Holds private keys, like an export in Download |
-| `system/bin/wg` | `wg` from [wireguard-tools](https://git.zx2c4.com/wireguard-tools/) v1.0.20250521, static arm64 - also on the path: `su -c '/system/bin/wg show wgs0'` |
+| `system/bin/wg` | `wg` from [wireguard-tools](https://git.zx2c4.com/wireguard-tools/) v1.0.20260223, static arm64 - also on the path: `su -c '/system/bin/wg show wgs0'` |
 | `system/bin/awg` | `awg` from [amneziawg-tools](https://github.com/amnezia-vpn/amneziawg-tools) 3.1.20260812, static arm64 - for an AmneziaWG tunnel: `su -c '/system/bin/awg show wgs0'` (that output includes the header protection key - do not share it; `ctl.sh diag` hides it) |
 
 ### Status file (for other modules)
@@ -283,7 +283,7 @@ Remove the module in your root manager and reboot. The tunnel and every rule are
 
 ## Build `wg` and `awg`
 
-`build.sh` (in this repo) downloads wireguard-tools v1.0.20250521 and amneziawg-tools (pinned to commit `ee0f0a9aa34ff0a0da4b3433b9512781cfe02843`, 3.1.20260812) and builds both as static arm64 binaries with [zig](https://ziglang.org):
+`build.sh` (in this repo) downloads wireguard-tools v1.0.20260223 and amneziawg-tools (pinned to commit `ee0f0a9aa34ff0a0da4b3433b9512781cfe02843`, 3.1.20260812) and builds both as static arm64 binaries with [zig](https://ziglang.org):
 
 ```sh
 bash build.sh                 # → out/wg and out/awg, copy to system/bin/
@@ -294,7 +294,7 @@ The build is reproducible with zig 0.16.0. SHA-256 of the files in the release:
 
 | File | SHA-256 |
 |---|---|
-| `wg` | `b460f9dddaa75b1293eefdd6f7152a30ccf3ffa19267968c52654efdbe056cd0` |
+| `wg` | `92efd615c43f6668826ee84338a05587b24e5ad5dc3a5586f9312ca825b827da` |
 | `awg` | `db3c9a3e384e8bf779fd72408db59b7e061ce214f570438f0e6a87f9fa559a04` |
 
 ---
