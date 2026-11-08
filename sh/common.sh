@@ -98,6 +98,17 @@ tunnel_name_ok() {
     [ "${#1}" -le 40 ]
 }
 
+# ipv4_ok ADDRESS - four dot-separated numbers 0-255 (no prefix)
+ipv4_ok() {
+    case "$1" in ""|*[!0-9.]*|.*|*.|*..*) return 1 ;; esac
+    _o=$IFS; IFS=.; set -f; set -- $1; set +f; IFS=$_o; unset _o
+    [ $# = 4 ] || return 1
+    for _x in "$@"; do
+        [ "${#_x}" -le 3 ] && [ "$_x" -le 255 ] 2>/dev/null || { unset _x; return 1; }
+    done
+    unset _x
+}
+
 # ---- settings (KEY=value, whitelist, never sourced) ---------------------------
 settings_load() {
     S_ACTIVE=""; S_LAST=""; S_KILLSWITCH=1; S_AUTOSWITCH=0; S_NOTIFY=1; S_PROFILE=battery; S_CHECKS=30

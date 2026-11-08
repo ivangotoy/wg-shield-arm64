@@ -77,10 +77,17 @@ tun_parse() {
         */*) : ;;
         *) T_ADDR="$T_ADDR/32" ;;
     esac
+    _pl=${T_ADDR#*/}
+    ipv4_ok "${T_ADDR%%/*}" && case "$_pl" in ""|*[!0-9]*) false ;; *) [ "${#_pl}" -le 2 ] && [ "$_pl" -le 32 ] ;; esac ||
+        { T_ERR="bad Address '$T_ADDR'"; return 1; }
     # Endpoint: IPv4 literal, or a host name (resolved when the tunnel loads)
     T_EPIP=""; T_EPHOST=""; T_PORT=${T_EP##*:}; _h=${T_EP%:*}
     [ -n "$T_EP" ] && [ "$_h" != "$T_EP" ] || { T_ERR="Endpoint needs host:port (got '$T_EP')"; return 1; }
-    case "$T_PORT" in ""|*[!0-9]*) T_ERR="Endpoint has no valid port (got '$T_EP')"; return 1 ;; esac
+    case "$T_PORT" in
+        ""|*[!0-9]*) T_ERR="Endpoint has no valid port (got '$T_EP')"; return 1 ;;
+        *) [ "${#T_PORT}" -le 5 ] && [ "$T_PORT" -ge 1 ] && [ "$T_PORT" -le 65535 ] ||
+               { T_ERR="Endpoint port must be 1-65535 (got '$T_EP')"; return 1; } ;;
+    esac
     case "$_h" in
         "") T_ERR="Endpoint has no host"; return 1 ;;
         *[!0-9.]*)
@@ -89,7 +96,8 @@ tun_parse() {
                 *.*) T_EPHOST=$_h ;;
                 *) T_ERR="Endpoint host name has no domain (got '$T_EP')"; return 1 ;;
             esac ;;
-        *) T_EPIP=$_h ;;
+        *) ipv4_ok "$_h" || { T_ERR="Endpoint is not a valid IPv4 address (got '$T_EP')"; return 1; }
+           T_EPIP=$_h ;;
     esac
     case ",$_aips," in *,0.0.0.0/0,*) : ;; *) T_ERR="AllowedIPs must include 0.0.0.0/0 (full tunnel)"; return 1 ;; esac
     # IPv6 through the tunnel: an IPv6 address and ::/0

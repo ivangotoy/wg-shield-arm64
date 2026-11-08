@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased (local fork)
+
+Fixes found with a new offline test harness; no change for working setups.
+
+* **Settings changes no longer race the watchdog** - `up`, `switch`, `down`, `remove`, `removeall` and every `set` now change `settings.conf` under the watchdog lock. Before, a change made while a tick was running could be overwritten by the tick (the auto-switch saves the tunnel it switched to), so a `down` or `set killswitch` could be undone silently
+* **Tunnel files are checked more strictly** - the endpoint port must be 1-65535 and an IPv4 endpoint and the `Address` must be real addresses (four numbers 0-255, prefix 0-32). Before, for example `Endpoint = 999.1.1.1:99999` was imported and only failed later at `wg setconf`, with an error state
+* **Test harness** - `bash tests/harness.sh` runs the module scripts on a Linux PC inside a private user and network namespace (`unshare -rn`, no root, nothing outside is touched): import, up, handshake, kill switch, routing, validation, locking, backup and restore. `WGS_TEST_BB=/path/to/busybox` runs the same cases with busybox ash and its applets
+
+---
+
 ## 2.6
 
 Backup and restore of your tunnels.
