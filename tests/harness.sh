@@ -55,6 +55,28 @@ printf '#!/bin/sh\necho "package:com.android.captiveportallogin uid:10050"\n' > 
 printf '#!/bin/sh\nexit 1\n' > "$FAKES/ping"
 printf '#!/bin/sh\nexit 0\n' > "$FAKES/su"
 printf '#!/bin/sh\nexit 0\n' > "$FAKES/cmd"
+# iptables: the rules as "-A CHAIN ..." lines in $WGS_IPT_DIR/<table>
+# (exact text match for -C / -D, chains with -N; enough for the DNS chain)
+cat > "$FAKES/iptables" <<'EOF'
+#!/bin/sh
+[ "$1" = -w ] && shift
+t=filter; [ "$1" = -t ] && { t=$2; shift 2; }
+mkdir -p "$WGS_IPT_DIR"; f="$WGS_IPT_DIR/$t"; touch "$f"
+op=$1; ch=$2; shift 2; r="-A $ch $*"; r=${r% }
+has() { grep -qx -- "-N $ch" "$f"; }
+case "$op" in
+    -N) has && exit 1; echo "-N $ch" >> "$f" ;;
+    -F) has || exit 1; grep -v -- "^-A $ch " "$f" > "$f.n"; mv "$f.n" "$f" ;;
+    -X) has || exit 1; grep -q -- "^-A $ch " "$f" && exit 1; grep -q -- "-j $ch\$" "$f" && exit 1
+        grep -vx -- "-N $ch" "$f" > "$f.n"; mv "$f.n" "$f" ;;
+    -A) [ "$ch" = OUTPUT ] || has || exit 1; echo "$r" >> "$f" ;;
+    -C) grep -qxF -- "$r" "$f" ;;
+    -D) grep -qxF -- "$r" "$f" || exit 1
+        awk -v l="$r" '!d && $0 == l { d = 1; next } { print }' "$f" > "$f.n"; mv "$f.n" "$f" ;;
+    -S) has || exit 1; grep -- "^-A $ch " "$f" ;;
+    *) exit 2 ;;
+esac
+EOF
 chmod 755 "$FAKES"/*
 
 # ---- module copy (module_desc rewrites module.prop: never the repo's) ----------
@@ -69,6 +91,7 @@ export WGS_GETPROP="$FAKES/getprop" WGS_DUMPSYS="$FAKES/dumpsys" WGS_PM="$FAKES/
 export WGS_PING="$FAKES/ping" WGS_SU="$FAKES/su" WGS_CMD="$FAKES/cmd"
 export WGS_LINKTYPE=veth WGS_PROC6="$RUN/proc6" WGS_SYSNET="$RUN/sysnet"
 export WGS_SH="$TSH" WGS_HEAL_WAIT=1
+export WGS_IPT="$FAKES/iptables" WGS_IPT_DIR="$RUN/ipt"
 STATE="$WGS_DATA/state"
 mkdir -p "$WGS_MODULES" "$WGS_DL" "$WGS_PROC6/all"
 echo 1 > "$WGS_PROC6/all/disable_ipv6"          # no IPv6 on the fake phone
@@ -362,6 +385,60 @@ if want watchdog; then
     p=$(cat "$STATE/monitor.pid" 2>/dev/null); [ -n "$p" ] && kill "$p" 2>/dev/null
     ip rule del pref 16000 fwmark 0x10066/0x1ffff iif lo lookup 1028
     sed -i '/^102 /d' "$RUN/networks"
+fi
+
+if want dns; then
+    echo "dns: app DNS goes to the tunnel's DNS while it captures traffic"
+    nat() { cat "$WGS_IPT_DIR/nat" 2>/dev/null; }
+    hasnat() { nat | grep -qxF -- "$1" && echo yes || echo no; }
+    J="-A OUTPUT -j wgs_dns"; DN="-A wgs_dns -p udp --dport 53 -j DNAT --to-destination 10.2.0.1:53"
+    reset_state; rm -rf "$WGS_IPT_DIR"
+    conf "$WGS_DL/wg-DE-1.conf" 203.0.113.61:51820
+    ctl import wg-DE-1.conf >/dev/null
+    date +%s > "$STATE/fake_hs"
+    ctl up wg-DE-1 >/dev/null
+    check "OUTPUT jumps to wgs_dns" yes "$(hasnat "$J")"
+    check "udp 53 DNAT to the tunnel DNS" yes "$(hasnat "$DN")"
+    check "tcp 53 DNAT to the tunnel DNS" yes "$(hasnat "-A wgs_dns -p tcp --dport 53 -j DNAT --to-destination 10.2.0.1:53")"
+    check "Android's network check left alone" yes "$(hasnat "-A wgs_dns -m owner --uid-owner 1073 -j RETURN")"
+    check "captive portal login left alone" yes "$(hasnat "-A wgs_dns -m owner --uid-owner 10050 -j RETURN")"
+    check "endpoint lookup resolver left alone" yes "$(hasnat "-A wgs_dns -d 9.9.9.9 -j RETURN")"
+    check "logged" 1 "$(grep -c "apps use the tunnel's DNS 10.2.0.1" "$WGS_DATA/logs/wg-shield.log")"
+    "$WGS_IPT" -w -t nat -D OUTPUT -j wgs_dns
+    ctl status >/dev/null
+    check "jump removed by someone else: repaired" yes "$(hasnat "$J")"
+    mkdir -p "$WGS_MODULES/dnscrypt-proxy-android"
+    ctl status >/dev/null
+    check "DNSCrypt Proxy on: no redirect" no "$(hasnat "$J")"
+    check "DNSCrypt Proxy on: chain removed" no "$(nat | grep -qx -- '-N wgs_dns' && echo yes || echo no)"
+    touch "$WGS_MODULES/dnscrypt-proxy-android/disable"
+    ctl status >/dev/null
+    check "DNSCrypt Proxy disabled: redirect back" yes "$(hasnat "$DN")"
+    rm -rf "$WGS_MODULES/dnscrypt-proxy-android"
+    ctl set killswitch 0 >/dev/null
+    echo $(( $(date +%s) - 600 )) > "$STATE/fake_hs"
+    ctl status >/dev/null
+    check "tunnel down, kill switch off: network DNS again" no "$(hasnat "$J")"
+    date +%s > "$STATE/fake_hs"; ctl set killswitch 1 >/dev/null; ctl status >/dev/null
+    check "up again: redirect back" yes "$(hasnat "$J")"
+    ctl down >/dev/null
+    check "down: redirect removed" no "$(hasnat "$J")"
+    check "down: chain removed" no "$(nat | grep -qx -- '-N wgs_dns' && echo yes || echo no)"
+    sed -i 's#^DNS = .*#DNS = fd00::53, 10.2.0.9, example.lan#' "$WGS_DL/wg-DE-1.conf"
+    ctl import wg-DE-1.conf >/dev/null; ctl up wg-DE-1 >/dev/null
+    check "first IPv4 of the DNS line" yes "$(hasnat "-A wgs_dns -p udp --dport 53 -j DNAT --to-destination 10.2.0.9:53")"
+    ctl down >/dev/null
+    sed -i '/^DNS = /d' "$WGS_DL/wg-DE-1.conf"
+    ctl import wg-DE-1.conf >/dev/null; ctl up wg-DE-1 >/dev/null
+    check "no DNS line: DNS left alone" no "$(hasnat "$J")"
+    ctl down >/dev/null
+    conf "$WGS_DL/wg-DE-1.conf" 203.0.113.61:51820
+    ctl import wg-DE-1.conf >/dev/null
+    WGS_IPT="$RUN/no-iptables" ctl up wg-DE-1 >/dev/null
+    WGS_IPT="$RUN/no-iptables" ctl status >/dev/null; WGS_IPT="$RUN/no-iptables" ctl status >/dev/null
+    check "no iptables: one warning, no state" "1 no" "$(grep -c "could not send DNS to 10.2.0.1" "$WGS_DATA/logs/wg-shield.log") $([ -f "$STATE/dns.want" ] && echo yes || echo no)"
+    check "no iptables: traffic still through the tunnel" wgs0 "$(route_of)"
+    ctl down >/dev/null
 fi
 
 if want busybox_path; then

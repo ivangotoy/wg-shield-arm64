@@ -174,7 +174,8 @@ app on the phone  /  device on your hotspot
 internet
 ```
 
-- **DNS stays with DNSCrypt Proxy** - WG Shield never sets DNS (the `DNS =` line of a config is ignored); DNSCrypt's own queries simply travel inside the tunnel. Its System tab shows *Through WG Shield · tunnel*
+- **DNS stays with DNSCrypt Proxy** - while DNSCrypt Proxy is on, WG Shield leaves DNS alone (the `DNS =` line of a config is not used); DNSCrypt's own queries simply travel inside the tunnel. Its System tab shows *Through WG Shield · tunnel*
+- **Without DNSCrypt Proxy, apps use the tunnel's DNS** - while the tunnel carries traffic, app DNS (port 53) is sent to the first IPv4 server of the config's `DNS =` line, through the tunnel. Without this, name lookups fail on mobile data: Android asks the carrier's resolvers, which do not answer queries arriving from the VPN server. Android's network check, the captive portal login and the host-name endpoint lookup keep their own resolvers; a config without `DNS =` leaves DNS to the network
 - **Hotspot devices follow the tunnel** - WireGuard or AmneziaWG alike: VPN Hotspot (1.0-r13 or newer) reads WG Shield's status: through the tunnel when it is up, direct when you turn it off or pause it, blocked when it fails
 - **ipset** blocks as always; a tunnel server must never be in its lists (check it with its *Check* tool)
 - **LAN Cloak** - hides what the Wi-Fi network itself sees of the phone (DHCP, announcements); the tunnel covers the rest. WG Shield's Dashboard shows its state

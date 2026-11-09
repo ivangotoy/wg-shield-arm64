@@ -14,7 +14,7 @@
 # tun_parse FILE -> T_* variables, T_ERR empty when usable, T_WARN notes
 tun_parse() {
     T_ADDR=""; T_EP=""; T_EPIP=""; T_MTU=1420; T_KA=""; T_ERR=""; T_WARN=""; T_TYPE=wireguard; _awg=0; _hpk=0
-    _ni=0; _np=0; _pk=0; _pub=0; _psk=0; T_ADDR6=""; T_V6=0; _addr=""; _mtu=""; _dns=0; _ign=""; _aips=""
+    _ni=0; _np=0; _pk=0; _pub=0; _psk=0; T_ADDR6=""; T_V6=0; _addr=""; _mtu=""; _dns=""; _ign=""; _aips=""; T_DNS=""
     [ -f "$1" ] || { T_ERR="file not found"; return 1; }
     _out=$(tr -d '\r' 2>/dev/null < "$1" | awk '
     function trim(s) { gsub(/[ \t]/, "", s); return s }
@@ -31,7 +31,7 @@ tun_parse() {
             if (k == "privatekey") pk = (length(v) == 44 && v ~ /^[A-Za-z0-9+\/]+=$/) ? 1 : (v == "" ? 0 : 2)
             else if (k == "address") addr = (addr == "" ? v : addr "," v)
             else if (k == "mtu") mtu = v
-            else if (k == "dns") dns = 1
+            else if (k == "dns") dns = (dns == "" ? v : dns "," v)
             else if (k == "table" || k == "preup" || k == "postup" || k == "predown" || k == "postdown" || k == "saveconfig") ign = ign " " k
             else if (k == "headerprotectionkey") { awg = 1; hpk = (length(v) == 44 && v ~ /^[A-Za-z0-9+\/]+=$/) ? 1 : 2 }
             else if (k ~ /^(jc|jmin|jmax|s[1-4]|h[1-4]|i[1-5]|contentpaddingaddition|randomtrailers|disablecookies|keepalivetimeout|maxhandshakeattempts|rejectaftertime|rekeyaftertime|rekeytimeout)$/) awg = 1
@@ -46,7 +46,7 @@ tun_parse() {
     }
     END {
         printf "PSK=%d\nAWG=%d\nHPK=%d\n", psk, awg, hpk
-        printf "NI=%d\nNP=%d\nPK=%d\nPUB=%d\nADDR=%s\nMTU=%s\nDNS=%d\nIGN=%s\nEP=%s\nAIPS=%s\nKA=%s\n", ni, np, pk, pub, addr, mtu, dns, ign, ep, aips, ka
+        printf "NI=%d\nNP=%d\nPK=%d\nPUB=%d\nADDR=%s\nMTU=%s\nDNS=%s\nIGN=%s\nEP=%s\nAIPS=%s\nKA=%s\n", ni, np, pk, pub, addr, mtu, dns, ign, ep, aips, ka
     }')
     _oifs=$IFS; IFS='
 '
@@ -109,7 +109,12 @@ tun_parse() {
     case "$_mtu" in "") : ;; *[!0-9]*) T_WARN="$T_WARN bad-MTU-ignored" ;;
         *) if [ "$_mtu" -ge 1280 ] && [ "$_mtu" -le 1500 ]; then T_MTU=$_mtu; else T_WARN="$T_WARN MTU-out-of-range-ignored"; fi ;;
     esac
-    [ "$_dns" = 1 ] && T_WARN="$T_WARN DNS-ignored(dns-is-left-to-the-system/dnscrypt-proxy)"
+    # DNS: the first IPv4 server is used while the tunnel is on (sh/net.sh
+    # dns_ensure); IPv6 servers and search domains are not used
+    for _d in $(echo "$_dns" | tr ',' ' '); do
+        ipv4_ok "$_d" && { T_DNS=$_d; break; }
+    done
+    [ -n "$_dns" ] && [ -z "$T_DNS" ] && T_WARN="$T_WARN DNS-without-IPv4-ignored"
     [ -n "$T_EPHOST" ] && T_WARN="$T_WARN host-name-endpoint(resolved-at-connect)"
     [ -n "$_ign" ] && T_WARN="$T_WARN ignored:$(echo $_ign | tr ' ' ',')"
     [ -z "$T_KA" ] && T_WARN="$T_WARN no-PersistentKeepalive(25-is-used)"
