@@ -264,6 +264,30 @@ EOF
     fi
 fi
 
+if want zipnames; then
+    echo "zipnames: zip entries with spaces are imported and restored"
+    reset_state
+    if command -v python3 >/dev/null; then
+        conf "$RUN/inner.conf" 203.0.113.16:51820
+        python3 -I - "$WGS_DL/spaces.zip" "$RUN/inner.conf" <<'EOF'
+import sys, zipfile
+with zipfile.ZipFile(sys.argv[1], "w") as z:
+    z.write(sys.argv[2], "my vpn.conf")
+    z.write(sys.argv[2], "dir with space/NL *.conf")
+EOF
+        out=$(ctl import spaces.zip 2>&1)
+        check "both entries imported" 2 "$(echo "$out" | kv imported)"
+        check "name with a space sanitized" "yes yes" "$([ -f "$WGS_DATA/tunnels/my_vpn.conf" ] && echo yes || echo no) $([ -f "$WGS_DATA/tunnels/NL__.conf" ] && echo yes || echo no)"
+        ctl removeall >/dev/null
+        mkdir -p "$WGS_BACKUP_ROOT"; cp "$WGS_DL/spaces.zip" "$WGS_BACKUP_ROOT/wg-shield-backup.zip"
+        out=$(ctl restore 2>&1)
+        check "restore: both entries imported" 2 "$(echo "$out" | kv imported)"
+        rm -f "$WGS_BACKUP_ROOT/wg-shield-backup.zip" "$WGS_DL/spaces.zip"
+    else
+        echo "  skip (python3 missing)"
+    fi
+fi
+
 if want lock; then
     echo "lock: settings changes wait for the watchdog's lock"
     reset_state
