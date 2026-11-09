@@ -93,6 +93,16 @@ case "\$*" in
     *) exec "$REALIP" "\$@" ;;
 esac
 EOF
+# ip that notes, at the moments wgs0 would send its first handshake (setconf
+# comes right before "addr flush"; a new link: "link set ... up"), which
+# endpoints rule 5000 sends around the tunnel
+cat > "$FAKES/ipo" <<EOF
+#!/bin/sh
+case "\$*" in
+    "addr flush dev wgs0"|"link set wgs0 mtu "*" up") echo "\${1}: \$("$REALIP" rule | sed -n 's/^5000:.* to \([0-9.]*\) .*/\1/p' | tr '\n' ' ')" >> "\$WGS_IPLOG" ;;
+esac
+exec "$REALIP" "\$@"
+EOF
 chmod 755 "$FAKES"/*
 
 # ---- module copy (module_desc rewrites module.prop: never the repo's) ----------
@@ -179,6 +189,29 @@ if want basic; then
     ctl down >/dev/null
     check "state after down" off "$(st state)"
     check "direct after down" wlan0 "$(route_of)"
+fi
+
+if want endpoint_rule; then
+    echo "endpoint_rule: rule 5000 knows the new endpoint before the first handshake"
+    reset_state
+    export WGS_IPLOG="$RUN/iplog"; rm -f "$WGS_IPLOG"
+    conf "$WGS_DL/wg-SE-1.conf" 203.0.113.71:51820
+    conf "$WGS_DL/wg-SE-2.conf" 203.0.113.72:51820
+    conf "$WGS_DL/wg-SE-3.conf" 203.0.113.73:51820
+    for n in wg-SE-1 wg-SE-2 wg-SE-3; do ctl import "$n.conf" >/dev/null; done
+    WGS_IP="$FAKES/ipo" ctl up wg-SE-1 >/dev/null
+    check "first tunnel: new link comes up with its endpoint rule" "link: 203.0.113.71 " "$(grep '^link' "$WGS_IPLOG" | tail -n 1)"
+    rm -f "$WGS_IPLOG"
+    WGS_IP="$FAKES/ipo" ctl up wg-SE-2 >/dev/null
+    check "switch: the new endpoint's rule, the old one gone, before setconf" "addr: 203.0.113.72 " "$(grep '^addr' "$WGS_IPLOG" | tail -n 1)"
+    check "switch: one endpoint rule afterwards" "1 1" "$(ip rule | grep -c '^5000:') $(ip rule | grep -c '^5000:.*to 203.0.113.72 ')"
+    rm -f "$WGS_IPLOG"
+    ip link del wgs0                         # recovery: wgs0 is created again
+    WGS_IP="$FAKES/ipo" ctl up wg-SE-3 >/dev/null
+    check "new link on another endpoint: its rule first" "link: 203.0.113.73 " "$(grep '^link' "$WGS_IPLOG" | tail -n 1)"
+    ctl down >/dev/null
+    check "down: no endpoint rule left" 0 "$(ip rule | grep -c '^5000:')"
+    unset WGS_IPLOG
 fi
 
 if want killswitch_off; then

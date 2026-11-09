@@ -601,6 +601,7 @@ tunnel_ensure() {
             wlog INFO "endpoint $T_EPHOST is $T_EPIP"
             mono_now > "$STATE/resolved_at"
         fi
+        ep_rule "$T_EPIP"
         if [ "$FAKE_LINK" = 0 ]; then
             tool=$(wg_tool "$T_TYPE"); tn=${tool##*/}
             [ -x "$tool" ] || { ERR="${tn}_tool_missing"; return 1; }
@@ -637,6 +638,21 @@ tunnel_ensure() {
     return 0
 }
 
+# ep_rule ADDRESS - rule 5000 (the tunnel's own UDP around the tunnel) for
+# the endpoint ADDRESS, set BEFORE wgs0 gets that endpoint: the first
+# handshake leaves at setconf / link up / wg set, and without the rule it
+# would be routed into wgs0 itself and dropped (retry after ~5 s). The rule
+# of a previous endpoint goes at the same moment, so that address does not
+# keep a way around the tunnel. rules_apply finds the result as it wants it.
+ep_rule() {
+    [ -n "$DEF" ] && [ -n "$1" ] || return 0
+    "$IP" rule add pref 5000 iif lo to "$1/32" lookup "$DEFN" 2>/dev/null
+    for _e in $("$IP" rule 2>/dev/null | awk '$1 == "5000:" { for (i = 1; i < NF; i++) if ($i == "to") print $(i + 1) }'); do
+        [ "${_e%/32}" = "$1" ] || "$IP" rule del pref 5000 to "${_e%/32}/32" 2>/dev/null
+    done
+    unset _e
+}
+
 info_save() { printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' "$T_ADDR" "$T_EP" "$T_EPIP" "$T_MTU" "$T_EPHOST" "$T_PORT" "$T_ADDR6" "$T_V6" "$T_TYPE" "$T_DNS" "$T_DNS6" > "$STATE/tunnel.info"; }
 
 # a host-name endpoint whose tunnel stopped answering: its address may have
@@ -648,6 +664,7 @@ reresolve() {
     mono_now > "$STATE/resolved_at"
     new=$(resolve_host "$T_EPHOST") || return 0
     [ "$new" != "$T_EPIP" ] || return 0
+    ep_rule "$new"
     if [ "$FAKE_LINK" = 0 ]; then
         tool=$(wg_tool "$T_TYPE")
         pk=$("$tool" show "$IFACE" peers 2>/dev/null | head -n1)
