@@ -748,6 +748,26 @@ except OSError:
     export WGS_IP="$REALIP"
 fi
 
+if want webui; then
+    echo "webui: the page script, and tunnel names kept out of handler code (node)"
+    if command -v node >/dev/null; then
+        mkdir -p "$RUN/webui"
+        sed -n '/<script>/,/<\/script>/p' "$REPO/webroot/index.html" | sed '1d;$d' > "$RUN/webui/page.js"
+        check "page script parses (node --check)" 0 "$(node --check "$RUN/webui/page.js" >/dev/null 2>&1; echo $?)"
+        check "no inline handler interpolates a value" 0 "$(grep -cE 'on(click|change|input)="[^"]*\$\{' "$REPO/webroot/index.html")"
+        node "$REPO/tests/webui_rows.js" "$REPO/webroot/index.html" > "$RUN/webui/rows.txt" 2>&1
+        while IFS= read -r l; do
+            case "$l" in
+                "  ok   "*) check "${l#  ok   }" ok ok ;;
+                "  FAIL "*) check "${l#  FAIL }" ok fail ;;
+                *) check "row test: $l" ok fail ;;
+            esac
+        done < "$RUN/webui/rows.txt"
+    else
+        echo "  skip (node missing)"
+    fi
+fi
+
 if want busybox_path; then
     echo "busybox_path: KernelSU, APatch and Magisk busybox are found"
     bbof() { env -u WGS_BB $TSH -c '. "$WGS_MODDIR/sh/common.sh"; echo "$BB"'; }
