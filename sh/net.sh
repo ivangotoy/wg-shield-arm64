@@ -397,41 +397,93 @@ resolve_host() {
     return 1
 }
 
-# Tunnel DNS. Android sends DNS to the resolvers of the network it is on.
-# On Wi-Fi these are usually on the LAN and stay local (5012); a carrier's
-# resolvers are reached through the tunnel and answer only their own
-# subscribers, so every name lookup fails on mobile data. While the tunnel
-# captures traffic, app DNS (port 53) that the routing sends into the tunnel
-# (-o wgs0) goes to the tunnel's DNS instead (the first IPv4 of the config's
-# DNS line). Only that DNS: a query to a LAN resolver keeps its LAN source
-# address, which the tunnel's server would drop, and a carrier service
-# network (IMS, MMS) needs its own resolvers on its own network - both stay
-# as they are. Left alone as well: Android's checks and the login page
-# (exempt uids), the lookup of a host-name endpoint ($RESOLVERS), local
+# Tunnel DNS. Android sends DNS to the resolvers of the network it is on: a
+# carrier's resolvers are reached through the tunnel and answer only their
+# own subscribers (every name lookup fails on mobile data), a Wi-Fi's are
+# usually on the LAN (5012) and would see every lookup. While the tunnel
+# captures traffic, app DNS (port 53) that leaves through the tunnel (-o
+# wgs0) or through a captured network (the default one and every other
+# network that goes through the tunnel, -o <its interface>) goes to the
+# tunnel's DNS instead (the first IPv4 of the config's DNS line). A query
+# redirected from a LAN resolver keeps its LAN source address; nat
+# POSTROUTING gives DNS leaving wgs0 for the tunnel's DNS the tunnel's own
+# address (SNAT), which is the only source the tunnel's server accepts.
+# Left alone: networks that stay outside (carrier service networks - IMS,
+# MMS - keep their own resolvers on their own network, also when they share
+# an interface: matched by their netId mark), Android's checks and the login
+# page (exempt uids), the lookup of a host-name endpoint ($RESOLVERS), local
 # resolvers (127/8), and everything when DNSCrypt Proxy is on (it answers
 # DNS on the phone itself).
 IPT="${WGS_IPT:-/system/bin/iptables}"
 DNSCHAIN=wgs_dns
+DNSSNAT=wgs_dnss
 dns_del() {
-    [ -f "$STATE/dns.want" ] || "$IPT" -w -t nat -S "$DNSCHAIN" >/dev/null 2>&1 || return 0
+    [ -f "$STATE/dns.want" ] || "$IPT" -w -t nat -S "$DNSCHAIN" >/dev/null 2>&1 ||
+        "$IPT" -w -t nat -S "$DNSSNAT" >/dev/null 2>&1 || return 0
+    # redirect first, then the SNAT it relies on
     while "$IPT" -w -t nat -D OUTPUT -j "$DNSCHAIN" 2>/dev/null; do :; done
     "$IPT" -w -t nat -F "$DNSCHAIN" 2>/dev/null
     "$IPT" -w -t nat -X "$DNSCHAIN" 2>/dev/null
+    while "$IPT" -w -t nat -D POSTROUTING -j "$DNSSNAT" 2>/dev/null; do :; done
+    "$IPT" -w -t nat -F "$DNSSNAT" 2>/dev/null
+    "$IPT" -w -t nat -X "$DNSSNAT" 2>/dev/null
     rm -f "$STATE/dns.want"
 }
-dns_apply() {  # dns_apply SERVER
+# dns_nets - sets DNS_OIFS (interfaces whose DNS is redirected: wgs0 and
+# the captured networks') and DNS_OUT (netId marks of networks that stay
+# outside). From the networks nets_classify wrote ($STATE/nets: "<netId>
+# <table> <class> <number>"; netd names a network's table after its
+# interface). A table without its name yet (netd adds it to rt_tables a
+# moment later, see tbl_num) is left out; the name is part of the dns.want
+# key, so the chain is rebuilt once it is there.
+dns_nets() {
+    DNS_OIFS=$IFACE; DNS_OUT=""
+    [ -n "$DEF" ] || return 0
+    _oifs=$IFS; IFS='
+'
+    for _l in $(tail -n +3 "$STATE/nets" 2>/dev/null); do
+        IFS=' '; set -- $_l; IFS='
+'
+        case "$3" in
+            default|tunnel|checking)
+                case "$2" in ""|*[!A-Za-z0-9._-]*) continue ;; *[!0-9]*) : ;; *) continue ;; esac
+                case " $DNS_OIFS " in *" $2 "*) : ;; *) DNS_OIFS="$DNS_OIFS $2" ;; esac ;;
+            outside)
+                case "$1" in 0x[0-9a-f]*) DNS_OUT="$DNS_OUT${DNS_OUT:+ }$1" ;; esac ;;
+        esac
+    done
+    IFS=$_oifs
+    unset _l _oifs
+}
+# the SNAT rule for PROTO (dns_apply and dns_ensure's check: the same text)
+dns_snat_rule() {  # dns_snat_rule PROTO SERVER ADDRESS
+    echo "-o $IFACE -d $2 -p $1 --dport 53 ! -s $3 -j SNAT --to-source $3"
+}
+dns_apply() {  # dns_apply SERVER ADDRESS - uses DNS_OIFS DNS_OUT
+    # the redirect off while it is rebuilt, the SNAT ready before it is back
     "$IPT" -w -t nat -N "$DNSCHAIN" 2>/dev/null || "$IPT" -w -t nat -F "$DNSCHAIN" 2>/dev/null
+    "$IPT" -w -t nat -N "$DNSSNAT" 2>/dev/null || "$IPT" -w -t nat -F "$DNSSNAT" 2>/dev/null
+    for _p in udp tcp; do
+        # shellcheck disable=SC2046
+        "$IPT" -w -t nat -A "$DNSSNAT" $(dns_snat_rule "$_p" "$1" "$2") 2>/dev/null
+    done
+    "$IPT" -w -t nat -C POSTROUTING -j "$DNSSNAT" 2>/dev/null || "$IPT" -w -t nat -A POSTROUTING -j "$DNSSNAT" 2>/dev/null
     for _u in $(exempt_uids); do
         "$IPT" -w -t nat -A "$DNSCHAIN" -m owner --uid-owner "$_u" -j RETURN 2>/dev/null
     done
     for _d in 127.0.0.0/8 "$1" $RESOLVERS; do
         "$IPT" -w -t nat -A "$DNSCHAIN" -d "$_d" -j RETURN 2>/dev/null
     done
-    for _p in udp tcp; do
-        "$IPT" -w -t nat -A "$DNSCHAIN" -o "$IFACE" -p "$_p" --dport 53 -j DNAT --to-destination "$1:53" 2>/dev/null
+    for _m in $DNS_OUT; do
+        "$IPT" -w -t nat -A "$DNSCHAIN" -m mark --mark "$_m/0xffff" -j RETURN 2>/dev/null
+    done
+    for _o in $DNS_OIFS; do
+        for _p in udp tcp; do
+            "$IPT" -w -t nat -A "$DNSCHAIN" -o "$_o" -p "$_p" --dport 53 -j DNAT --to-destination "$1:53" 2>/dev/null
+        done
     done
     "$IPT" -w -t nat -C OUTPUT -j "$DNSCHAIN" 2>/dev/null || "$IPT" -w -t nat -A OUTPUT -j "$DNSCHAIN" 2>/dev/null
-    unset _u _d _p
+    unset _u _d _p _m _o
 }
 # dns_ensure CAPTURE - the redirect is there exactly when it should be
 dns_ensure() {
@@ -441,15 +493,21 @@ dns_ensure() {
         if [ -f "$STATE/dns.want" ]; then dns_del; wlog INFO "DNS: left to the network"; fi
         unset _t; return 0
     fi
-    _k="$_t|-o $IFACE|$(exempt_uids | tr -s ' ' ',')"   # (-o: a chain without it is rebuilt)
-    if [ "$_k" != "$(cat "$STATE/dns.want" 2>/dev/null)" ] || ! "$IPT" -w -t nat -C OUTPUT -j "$DNSCHAIN" 2>/dev/null; then
+    _a=${T_ADDR%/*}
+    dns_nets
+    _k="$_t|-o $DNS_OIFS|snat $_a|outside $DNS_OUT|$(exempt_uids | tr -s ' ' ',')"
+    if [ "$_k" != "$(cat "$STATE/dns.want" 2>/dev/null)" ] || ! "$IPT" -w -t nat -C OUTPUT -j "$DNSCHAIN" 2>/dev/null ||
+       ! "$IPT" -w -t nat -C POSTROUTING -j "$DNSSNAT" 2>/dev/null; then
         _old=$(cat "$STATE/dns.want" 2>/dev/null)
-        dns_apply "$_t"
+        dns_apply "$_t" "$_a"
+        # shellcheck disable=SC2046
         if "$IPT" -w -t nat -C OUTPUT -j "$DNSCHAIN" 2>/dev/null &&
-           "$IPT" -w -t nat -C "$DNSCHAIN" -o "$IFACE" -p udp --dport 53 -j DNAT --to-destination "$_t:53" 2>/dev/null; then
+           "$IPT" -w -t nat -C "$DNSCHAIN" -o "$IFACE" -p udp --dport 53 -j DNAT --to-destination "$_t:53" 2>/dev/null &&
+           "$IPT" -w -t nat -C POSTROUTING -j "$DNSSNAT" 2>/dev/null &&
+           "$IPT" -w -t nat -C "$DNSSNAT" $(dns_snat_rule udp "$_t" "$_a") 2>/dev/null; then
             echo "$_k" > "$STATE/dns.want"; rm -f "$STATE/dns.bad"
             if [ "$_old" = "$_k" ]; then wlog WARN "DNS: the redirect was removed by someone else - repaired"
-            else wlog INFO "DNS: apps use the tunnel's DNS $_t"; fi
+            else wlog INFO "DNS: apps use the tunnel's DNS $_t (DNS leaving through $(echo "$DNS_OIFS" | sed 's/ /, /g'))"; fi
         else
             dns_del
             if [ "$_k" != "$(cat "$STATE/dns.bad" 2>/dev/null)" ]; then
@@ -458,7 +516,7 @@ dns_ensure() {
             fi
         fi
     fi
-    unset _t _k _old
+    unset _t _k _old _a
 }
 
 # boot guard (post-fs-data): block everything not bound to a network until the tunnel is up
