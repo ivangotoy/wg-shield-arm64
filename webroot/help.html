@@ -122,7 +122,7 @@
   <div class="tw"><table>
     <tr><th>rule</th><th>what for</th></tr>
     <tr><td>5000</td><td>The tunnel's own encrypted packets to the server go out through your network.</td></tr>
-    <tr><td>5010–5013</td><td>Local destinations stay local: your Wi-Fi LAN (router, printer, SSH from a laptop), hotspot devices, the local range of every other network.</td></tr>
+    <tr><td>5010–5013</td><td>Local destinations stay local: your Wi-Fi LAN (router, printer, SSH from a laptop), hotspot devices, the local range of every other network. App DNS to a resolver on the LAN goes to the tunnel's DNS instead while it is used (see 6).</td></tr>
     <tr><td>5014</td><td>Android's own network check and the hotel / airport login page stay on the network they are for.</td></tr>
     <tr><td>5020</td><td>Everything not bound to one network → the tunnel.</td></tr>
     <tr><td>5021</td><td>Everything bound to the current default network (Wi-Fi or mobile) → the tunnel.</td></tr>
