@@ -214,6 +214,20 @@ if want endpoint_rule; then
     unset WGS_IPLOG
 fi
 
+if want status_backslash; then
+    echo "status_backslash: a backslash in a status value is written as it is"
+    reset_state
+    conf "$WGS_DL/wg-AT-1.conf" 203.0.113.81:51820
+    ctl import wg-AT-1.conf >/dev/null
+    ctl up wg-AT-1 >/dev/null
+    # the tunnel file edited by root afterwards: the error quotes the raw Endpoint
+    sed -i 's#^Endpoint = .*#Endpoint = vpn\\cx.example:51820#' "$WGS_DATA/tunnels/wg-AT-1.conf"
+    ctl status >/dev/null
+    check "reason kept with its backslash" "invalid_tunnel: Endpoint must be an IPv4 address or a host name (got 'vpn\\cx.example:51820')" "$(st reason)"
+    check "keys after it still written" wg-AT-1 "$(st tunnel)"
+    ctl down >/dev/null
+fi
+
 if want killswitch_off; then
     echo "killswitch_off: down tunnel goes direct"
     reset_state
