@@ -441,6 +441,22 @@ if want dns; then
     ctl down >/dev/null
 fi
 
+if want dns_reboot; then
+    echo "dns_reboot: after a reboot the DNS redirect is set up as new, not as repaired"
+    reset_state; rm -rf "$WGS_IPT_DIR"
+    conf "$WGS_DL/wg-DE-4.conf" 203.0.113.63:51820
+    ctl import wg-DE-4.conf >/dev/null
+    date +%s > "$STATE/fake_hs"
+    ctl up wg-DE-4 >/dev/null
+    check "redirect on before the reboot" 1 "$(grep -c "apps use the tunnel's DNS 10.2.0.1" "$WGS_DATA/logs/wg-shield.log")"
+    rm -rf "$WGS_IPT_DIR"                 # a reboot empties iptables
+    $TSH "$MOD/post-fs-data.sh" >/dev/null 2>&1
+    ctl status >/dev/null
+    check "after the reboot: no 'removed by someone else' warning" 0 "$(grep -c 'DNS: the redirect was removed by someone else' "$WGS_DATA/logs/wg-shield.log")"
+    check "after the reboot: set up again" 2 "$(grep -c "apps use the tunnel's DNS 10.2.0.1" "$WGS_DATA/logs/wg-shield.log")"
+    ctl down >/dev/null
+fi
+
 if want dns_route; then
     echo "dns_route: only DNS the routing sends into the tunnel is redirected (real iptables)"
     IPTR=$(command -v iptables 2>/dev/null)
