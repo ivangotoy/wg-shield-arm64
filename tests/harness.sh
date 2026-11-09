@@ -77,6 +77,8 @@ case "$op" in
     *) exit 2 ;;
 esac
 EOF
+# ip6tables: the same, in $WGS_IPT_DIR/v6
+printf '#!/bin/sh\nWGS_IPT_DIR="$WGS_IPT_DIR/v6" exec "%s" "$@"\n' "$FAKES/iptables" > "$FAKES/ip6tables"
 # ip as on the phone: Android's ip reads netd's rt_tables, so rule listings
 # say "lookup wlan0"; the host's ip prints the number. Used by the DNS cases
 # (the redirect matches the interface named after the table).
@@ -105,7 +107,7 @@ export WGS_GETPROP="$FAKES/getprop" WGS_DUMPSYS="$FAKES/dumpsys" WGS_PM="$FAKES/
 export WGS_PING="$FAKES/ping" WGS_SU="$FAKES/su" WGS_CMD="$FAKES/cmd"
 export WGS_LINKTYPE=veth WGS_PROC6="$RUN/proc6" WGS_SYSNET="$RUN/sysnet"
 export WGS_SH="$TSH" WGS_HEAL_WAIT=1
-export WGS_IPT="$FAKES/iptables" WGS_IPT_DIR="$RUN/ipt"
+export WGS_IPT="$FAKES/iptables" WGS_IPT6="$FAKES/ip6tables" WGS_IPT_DIR="$RUN/ipt"
 STATE="$WGS_DATA/state"
 mkdir -p "$WGS_MODULES" "$WGS_DL" "$WGS_PROC6/all"
 echo 1 > "$WGS_PROC6/all/disable_ipv6"          # no IPv6 on the fake phone
@@ -580,6 +582,74 @@ except OSError:
         sed -i '/^1030 /d' "$WGS_RT_TABLES"
         export WGS_IP="$REALIP"; IPTR=$IPTR0
     fi
+fi
+
+if want dns6; then
+    echo "dns6: IPv6 app DNS goes to the tunnel's IPv6 DNS while the tunnel carries IPv6"
+    export WGS_IP="$FAKES/ipn"
+    nat6() { cat "$WGS_IPT_DIR/v6/nat" 2>/dev/null; }
+    hasnat6() { nat6 | grep -qxF -- "$1" && echo yes || echo no; }
+    J6="-A OUTPUT -j wgs_dns"; JS6="-A POSTROUTING -j wgs_dnss"
+    DN6="-A wgs_dns -o wgs0 -p udp --dport 53 -j DNAT --to-destination [fd00::53]:53"
+    SN6="-A wgs_dnss -o wgs0 -d fd00::53 -p udp --dport 53 ! -s fd00::2 -j SNAT --to-source fd00::2"
+    reset_state; rm -rf "$WGS_IPT_DIR"
+    echo 0 > "$WGS_PROC6/all/disable_ipv6"; mkdir -p "$WGS_PROC6/wgs0"; echo 0 > "$WGS_PROC6/wgs0/disable_ipv6"
+    conf "$WGS_DL/wg-CH-6.conf" 203.0.113.66:51820
+    sed -i 's#^Address = .*#Address = 10.2.0.2/32, fd00::2/128#; s#^AllowedIPs = .*#AllowedIPs = 0.0.0.0/0, ::/0#; s#^DNS = .*#DNS = 10.2.0.1, fd00::53#' "$WGS_DL/wg-CH-6.conf"
+    ctl import wg-CH-6.conf >/dev/null
+    date +%s > "$STATE/fake_hs"
+    ctl up wg-CH-6 >/dev/null
+    check "IPv6 through the tunnel" tunnel "$(st ipv6)"
+    check "IPv6: OUTPUT jumps to wgs_dns" yes "$(hasnat6 "$J6")"
+    check "IPv6: udp 53 into the tunnel to the IPv6 DNS" yes "$(hasnat6 "$DN6")"
+    check "IPv6: tcp 53 into the tunnel to the IPv6 DNS" yes "$(hasnat6 "-A wgs_dns -o wgs0 -p tcp --dport 53 -j DNAT --to-destination [fd00::53]:53")"
+    check "IPv6: LAN resolver to the IPv6 DNS" yes "$(hasnat6 "-A wgs_dns -o wlan0 -p udp --dport 53 -j DNAT --to-destination [fd00::53]:53")"
+    check "IPv6: local resolvers left alone" yes "$(hasnat6 "-A wgs_dns -d ::1/128 -j RETURN")"
+    check "IPv6: Android's network check left alone" yes "$(hasnat6 "-A wgs_dns -m owner --uid-owner 1073 -j RETURN")"
+    check "IPv6: SNAT to the tunnel's IPv6 address" "yes yes" "$(hasnat6 "$JS6") $(hasnat6 "$SN6")"
+    check "IPv4 redirect as before" yes "$(hasnat "-A wgs_dns -o wgs0 -p udp --dport 53 -j DNAT --to-destination 10.2.0.1:53")"
+    check "logged" 1 "$(grep -c "apps use the tunnel's DNS fd00::53 for IPv6" "$WGS_DATA/logs/wg-shield.log")"
+    "$WGS_IPT6" -w -t nat -D OUTPUT -j wgs_dns
+    ctl status >/dev/null
+    check "IPv6: jump removed by someone else: repaired" yes "$(hasnat6 "$J6")"
+    # IPv6 goes off for the phone: the tunnel carries IPv4 only
+    echo 1 > "$WGS_PROC6/all/disable_ipv6"
+    ctl status >/dev/null
+    check "IPv6 off: IPv6 redirect removed" "no no no" "$(hasnat6 "$J6") $(hasnat6 "$JS6") $(nat6 | grep -qx -- '-N wgs_dns' && echo yes || echo no)"
+    check "IPv6 off: IPv4 redirect kept" yes "$(hasnat "-A wgs_dns -o wgs0 -p udp --dport 53 -j DNAT --to-destination 10.2.0.1:53")"
+    check "IPv6 off: IPv6 DNS into the tunnel unreachable" unreachable "$(ip -6 route get 2001:db8::53 mark 0x10064 2>&1 | grep -q unreachable && echo unreachable || echo reachable)"
+    echo 0 > "$WGS_PROC6/all/disable_ipv6"
+    ctl status >/dev/null
+    check "IPv6 on again: redirect back" yes "$(hasnat6 "$DN6")"
+    ctl down >/dev/null
+    check "down: IPv6 redirect and SNAT removed" "no no" "$(hasnat6 "$J6") $(hasnat6 "$JS6")"
+    ctl up wg-CH-6 >/dev/null
+    WGS_IPT6="$RUN/no-ip6tables" ctl status >/dev/null; WGS_IPT6="$RUN/no-ip6tables" ctl status >/dev/null
+    check "no ip6tables nat: one warning, no state" "1 no" "$(grep -c "could not send DNS for IPv6 to fd00::53" "$WGS_DATA/logs/wg-shield.log") $([ -f "$STATE/dns6.want" ] && echo yes || echo no)"
+    check "no ip6tables nat: IPv4 redirect kept" yes "$(hasnat "-A wgs_dns -o wgs0 -p udp --dport 53 -j DNAT --to-destination 10.2.0.1:53")"
+    ctl down >/dev/null
+    # real ip6tables: a carrier IPv6 resolver routed into the tunnel
+    IP6R=$(command -v ip6tables 2>/dev/null)
+    if [ -n "$IP6R" ] && command -v python3 >/dev/null && "$IP6R" -w -t nat -L -n >/dev/null 2>&1 && "$IP6R" -w -t mangle -L -n >/dev/null 2>&1; then
+        WGS_IPT6=$IP6R ctl up wg-CH-6 >/dev/null
+        "$IP6R" -w -t mangle -F POSTROUTING
+        "$IP6R" -w -t mangle -A POSTROUTING -o wgs0 -s fd00::2 -d fd00::53 -p udp --dport 53 -j ACCEPT
+        python3 -I -c 'import socket
+s = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+s.setsockopt(socket.SOL_SOCKET, getattr(socket, "SO_MARK", 36), 0x10064)
+try:
+    s.connect(("2001:db8::53", 53)); s.send(b"q")
+except OSError:
+    pass'
+        check "real ip6tables: carrier IPv6 resolver -> tunnel IPv6 DNS" 1 "$("$IP6R" -w -t mangle -L POSTROUTING -v -n -x | awk '$1 ~ /^[0-9]+$/ { print $1; exit }')"
+        "$IP6R" -w -t mangle -F POSTROUTING
+        WGS_IPT6=$IP6R ctl down >/dev/null
+        check "real ip6tables: down, nat table clean" 0 "$("$IP6R" -w -t nat -S 2>/dev/null | grep -c wgs_dns)"
+    else
+        echo "  skip real ip6tables (no usable ip6tables nat/mangle or python3)"
+    fi
+    echo 1 > "$WGS_PROC6/all/disable_ipv6"
+    export WGS_IP="$REALIP"
 fi
 
 if want busybox_path; then
