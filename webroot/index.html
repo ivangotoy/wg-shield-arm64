@@ -705,7 +705,7 @@ function renderSet(st) {
   const ipm = st.dnscrypt_ipmode;
   const dnTxt = st.dnscrypt === 'on'
     ? 'Resolves all DNS; its own queries go through this tunnel.' + (ipm && ipm !== 'ipv4' ? (st.ipv6 === 'tunnel' ? ' IPv6 mode ' + esc(ipm) + ': IPv6 goes through the tunnel too.' : st.ipv6 === 'blocked' ? ' IPv6 mode ' + esc(ipm) + ', but this tunnel is IPv4 only: IPv6 is blocked while it is on.' : '') : '')
-    : 'Without it, apps use your network\'s DNS - WG Shield never sets DNS itself.';
+    : 'Without it, app DNS that goes into the tunnel is sent to the tunnel\'s DNS (the config\'s DNS line); without that line, apps use your network\'s DNS.';
   const vhsNew = num(st.vhs_code) >= 13;
   const vhsTxt = st.vhs !== 'on' ? 'Shares the tunnel with hotspot devices.'
     : !vhsNew ? 'This version does not see WG Shield\'s tunnel: with its kill switch on, hotspot devices get no internet while WG Shield is on. Update it to 1.0-r13 or newer.'
