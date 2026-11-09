@@ -286,6 +286,31 @@ if want lock; then
     check "lock released after a failed command" no "$([ -d "$STATE/lock" ] && echo yes || echo no)"
 fi
 
+if want lock_stale; then
+    echo "lock_stale: two processes take over a dead holder's lock - one gets it"
+    reset_state; mkdir -p "$STATE"
+    # both see the dead holder; kill -0 is slowed down so that the second one
+    # decides only after the first has taken the lock over
+    taker() {  # taker DELAY
+        $TSH -c '. "$WGS_MODDIR/sh/common.sh"; D=$1; kill() { sleep "$D"; command kill "$@"; }
+            if lock_try; then echo "$$" >> "$2"; sleep 2; fi' sh "$1" "$RUN/got"
+    }
+    sleep 0 & dead=$!; wait "$dead"
+    rm -rf "$STATE/lock" "$RUN/got"; mkdir "$STATE/lock"; echo "$dead" > "$STATE/lock/pid"
+    taker 0.3 & t1=$!; taker 0.9 & t2=$!
+    sleep 1.5
+    check "two takers: one holds the lock" 1 "$(grep -c . "$RUN/got" 2>/dev/null || echo 0)"
+    check "the lock is the holder's" "$(head -n 1 "$RUN/got" 2>/dev/null)" "$(cat "$STATE/lock/pid" 2>/dev/null)"
+    check "no takeover left inside the lock" no "$([ -d "$STATE/lock/takeover" ] && echo yes || echo no)"
+    wait "$t1" "$t2"
+    # a takeover left behind by a taker that died: cleared after 30 s
+    rm -rf "$STATE/lock" "$RUN/got"; mkdir -p "$STATE/lock/takeover"; echo "$dead" > "$STATE/lock/pid"
+    touch -d '@'"$(( $(date +%s) - 60 ))" "$STATE/lock/takeover"
+    $TSH -c '. "$WGS_MODDIR/sh/common.sh"; lock_try; lock_try && echo got' > "$RUN/got"
+    check "old takeover left behind: lock taken on the next try" got "$(cat "$RUN/got")"
+    rm -rf "$STATE/lock" "$RUN/got"
+fi
+
 if want backup; then
     echo "backup: zip written, checked, restored"
     reset_state

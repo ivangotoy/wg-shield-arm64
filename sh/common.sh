@@ -154,6 +154,7 @@ settings_save() {
 lock_try() {
     mkdir -p "$STATE"
     if mkdir "$STATE/lock" 2>/dev/null; then echo $$ > "$STATE/lock/pid"; return 0; fi
+    i=$(stat -c %i "$STATE/lock" 2>/dev/null)
     p=$(cat "$STATE/lock/pid" 2>/dev/null)
     if [ -n "$p" ]; then
         kill -0 "$p" 2>/dev/null && return 1
@@ -162,8 +163,23 @@ lock_try() {
         m=$(stat -c %Y "$STATE/lock" 2>/dev/null || echo 0)
         [ $(( $(epoch_now) - m )) -lt 30 ] && return 1
     fi
-    mv "$STATE/lock" "$STATE/lock.stale.$$" 2>/dev/null && rm -rf "$STATE/lock.stale.$$"
-    if mkdir "$STATE/lock" 2>/dev/null; then echo $$ > "$STATE/lock/pid"; return 0; fi
+    # the holder is gone. Only one process may take its lock over: mkdir of
+    # lock/takeover is atomic. The winner checks that "lock" is still the
+    # dead holder's (same directory, same pid) - another process may have
+    # taken it over meanwhile and hold a fresh lock there - before it
+    # replaces it. A takeover left behind by a process that died in the
+    # middle is cleared after 30 s.
+    if ! mkdir "$STATE/lock/takeover" 2>/dev/null; then
+        m=$(stat -c %Y "$STATE/lock/takeover" 2>/dev/null || epoch_now)
+        [ $(( $(epoch_now) - m )) -ge 30 ] && rmdir "$STATE/lock/takeover" 2>/dev/null
+        return 1
+    fi
+    if [ -n "$i" ] && [ "$(stat -c %i "$STATE/lock" 2>/dev/null)" = "$i" ] && [ "$(cat "$STATE/lock/pid" 2>/dev/null)" = "$p" ]; then
+        rm -rf "$STATE/lock"
+        if mkdir "$STATE/lock" 2>/dev/null; then echo $$ > "$STATE/lock/pid"; return 0; fi
+    else
+        rmdir "$STATE/lock/takeover" 2>/dev/null
+    fi
     return 1
 }
 
