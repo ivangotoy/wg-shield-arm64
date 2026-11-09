@@ -70,7 +70,7 @@ your Wi-Fi or mobile network → VPN server → internet
 | Rule | What for |
 |---|---|
 | 5000 | The tunnel's own encrypted packets to the server go out through your network |
-| 5010–5013 | Local destinations stay local: Wi-Fi LAN, hotspot devices, the local range of every other network |
+| 5010–5013 | Local destinations stay local: Wi-Fi LAN, hotspot devices, the local range of every other network (app DNS to a LAN resolver excepted while the tunnel's DNS is used) |
 | 5014 | Android's own network check (NetworkStack) and the captive portal login page stay on the network they are for |
 | 5020 | Everything not bound to one network → the tunnel |
 | 5021 | Everything bound to the current default network → the tunnel |
