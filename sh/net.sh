@@ -398,14 +398,18 @@ resolve_host() {
 }
 
 # Tunnel DNS. Android sends DNS to the resolvers of the network it is on.
-# On Wi-Fi these are usually on the LAN and stay local (5011); a carrier's
+# On Wi-Fi these are usually on the LAN and stay local (5012); a carrier's
 # resolvers are reached through the tunnel and answer only their own
 # subscribers, so every name lookup fails on mobile data. While the tunnel
-# captures traffic, app DNS (port 53) goes to the tunnel's DNS instead (the
-# first IPv4 of the config's DNS line), through the tunnel. Left alone:
-# Android's checks and the login page (exempt uids), the lookup of a
-# host-name endpoint ($RESOLVERS), local resolvers (127/8), and everything
-# when DNSCrypt Proxy is on (it answers DNS on the phone itself).
+# captures traffic, app DNS (port 53) that the routing sends into the tunnel
+# (-o wgs0) goes to the tunnel's DNS instead (the first IPv4 of the config's
+# DNS line). Only that DNS: a query to a LAN resolver keeps its LAN source
+# address, which the tunnel's server would drop, and a carrier service
+# network (IMS, MMS) needs its own resolvers on its own network - both stay
+# as they are. Left alone as well: Android's checks and the login page
+# (exempt uids), the lookup of a host-name endpoint ($RESOLVERS), local
+# resolvers (127/8), and everything when DNSCrypt Proxy is on (it answers
+# DNS on the phone itself).
 IPT="${WGS_IPT:-/system/bin/iptables}"
 DNSCHAIN=wgs_dns
 dns_del() {
@@ -424,7 +428,7 @@ dns_apply() {  # dns_apply SERVER
         "$IPT" -w -t nat -A "$DNSCHAIN" -d "$_d" -j RETURN 2>/dev/null
     done
     for _p in udp tcp; do
-        "$IPT" -w -t nat -A "$DNSCHAIN" -p "$_p" --dport 53 -j DNAT --to-destination "$1:53" 2>/dev/null
+        "$IPT" -w -t nat -A "$DNSCHAIN" -o "$IFACE" -p "$_p" --dport 53 -j DNAT --to-destination "$1:53" 2>/dev/null
     done
     "$IPT" -w -t nat -C OUTPUT -j "$DNSCHAIN" 2>/dev/null || "$IPT" -w -t nat -A OUTPUT -j "$DNSCHAIN" 2>/dev/null
     unset _u _d _p
@@ -437,12 +441,12 @@ dns_ensure() {
         if [ -f "$STATE/dns.want" ]; then dns_del; wlog INFO "DNS: left to the network"; fi
         unset _t; return 0
     fi
-    _k="$_t|$(exempt_uids | tr -s ' ' ',')"
+    _k="$_t|-o $IFACE|$(exempt_uids | tr -s ' ' ',')"   # (-o: a chain without it is rebuilt)
     if [ "$_k" != "$(cat "$STATE/dns.want" 2>/dev/null)" ] || ! "$IPT" -w -t nat -C OUTPUT -j "$DNSCHAIN" 2>/dev/null; then
         _old=$(cat "$STATE/dns.want" 2>/dev/null)
         dns_apply "$_t"
         if "$IPT" -w -t nat -C OUTPUT -j "$DNSCHAIN" 2>/dev/null &&
-           "$IPT" -w -t nat -C "$DNSCHAIN" -p udp --dport 53 -j DNAT --to-destination "$_t:53" 2>/dev/null; then
+           "$IPT" -w -t nat -C "$DNSCHAIN" -o "$IFACE" -p udp --dport 53 -j DNAT --to-destination "$_t:53" 2>/dev/null; then
             echo "$_k" > "$STATE/dns.want"; rm -f "$STATE/dns.bad"
             if [ "$_old" = "$_k" ]; then wlog WARN "DNS: the redirect was removed by someone else - repaired"
             else wlog INFO "DNS: apps use the tunnel's DNS $_t"; fi
