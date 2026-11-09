@@ -391,7 +391,7 @@ if want dns; then
     echo "dns: app DNS goes to the tunnel's DNS while it captures traffic"
     nat() { cat "$WGS_IPT_DIR/nat" 2>/dev/null; }
     hasnat() { nat | grep -qxF -- "$1" && echo yes || echo no; }
-    J="-A OUTPUT -j wgs_dns"; DN="-A wgs_dns -p udp --dport 53 -j DNAT --to-destination 10.2.0.1:53"
+    J="-A OUTPUT -j wgs_dns"; DN="-A wgs_dns -o wgs0 -p udp --dport 53 -j DNAT --to-destination 10.2.0.1:53"
     reset_state; rm -rf "$WGS_IPT_DIR"
     conf "$WGS_DL/wg-DE-1.conf" 203.0.113.61:51820
     ctl import wg-DE-1.conf >/dev/null
@@ -399,7 +399,7 @@ if want dns; then
     ctl up wg-DE-1 >/dev/null
     check "OUTPUT jumps to wgs_dns" yes "$(hasnat "$J")"
     check "udp 53 DNAT to the tunnel DNS" yes "$(hasnat "$DN")"
-    check "tcp 53 DNAT to the tunnel DNS" yes "$(hasnat "-A wgs_dns -p tcp --dport 53 -j DNAT --to-destination 10.2.0.1:53")"
+    check "tcp 53 DNAT to the tunnel DNS" yes "$(hasnat "-A wgs_dns -o wgs0 -p tcp --dport 53 -j DNAT --to-destination 10.2.0.1:53")"
     check "Android's network check left alone" yes "$(hasnat "-A wgs_dns -m owner --uid-owner 1073 -j RETURN")"
     check "captive portal login left alone" yes "$(hasnat "-A wgs_dns -m owner --uid-owner 10050 -j RETURN")"
     check "endpoint lookup resolver left alone" yes "$(hasnat "-A wgs_dns -d 9.9.9.9 -j RETURN")"
@@ -426,7 +426,7 @@ if want dns; then
     check "down: chain removed" no "$(nat | grep -qx -- '-N wgs_dns' && echo yes || echo no)"
     sed -i 's#^DNS = .*#DNS = fd00::53, 10.2.0.9, example.lan#' "$WGS_DL/wg-DE-1.conf"
     ctl import wg-DE-1.conf >/dev/null; ctl up wg-DE-1 >/dev/null
-    check "first IPv4 of the DNS line" yes "$(hasnat "-A wgs_dns -p udp --dport 53 -j DNAT --to-destination 10.2.0.9:53")"
+    check "first IPv4 of the DNS line" yes "$(hasnat "-A wgs_dns -o wgs0 -p udp --dport 53 -j DNAT --to-destination 10.2.0.9:53")"
     ctl down >/dev/null
     sed -i '/^DNS = /d' "$WGS_DL/wg-DE-1.conf"
     ctl import wg-DE-1.conf >/dev/null; ctl up wg-DE-1 >/dev/null
@@ -439,6 +439,52 @@ if want dns; then
     check "no iptables: one warning, no state" "1 no" "$(grep -c "could not send DNS to 10.2.0.1" "$WGS_DATA/logs/wg-shield.log") $([ -f "$STATE/dns.want" ] && echo yes || echo no)"
     check "no iptables: traffic still through the tunnel" wgs0 "$(route_of)"
     ctl down >/dev/null
+fi
+
+if want dns_route; then
+    echo "dns_route: only DNS the routing sends into the tunnel is redirected (real iptables)"
+    IPTR=$(command -v iptables 2>/dev/null)
+    if [ -z "$IPTR" ] || ! command -v python3 >/dev/null || ! "$IPTR" -w -t nat -L -n >/dev/null 2>&1 || ! "$IPTR" -w -t mangle -L -n >/dev/null 2>&1; then
+        echo "  skip (no usable iptables nat/mangle or python3 in the namespace)"
+    else
+        reset_state
+        # an IMS-like carrier network (permission SYSTEM): stays outside the tunnel
+        ip link add rmnet1 type veth peer name rmnet1p && ip link set rmnet1p up && ip link set rmnet1 up
+        ip addr add 10.65.0.2/24 dev rmnet1
+        ip route add 10.65.0.0/24 dev rmnet1 table 1030
+        ip route add default via 10.65.0.1 dev rmnet1 table 1030
+        echo "1030 rmnet1" >> "$WGS_RT_TABLES"
+        ip rule add pref 16000 fwmark 0xd0066/0xdffff iif lo lookup 1030
+        conf "$WGS_DL/wg-DE-3.conf" 203.0.113.62:51820
+        ctl import wg-DE-3.conf >/dev/null
+        date +%s > "$STATE/fake_hs"
+        WGS_IPT=$IPTR ctl up wg-DE-3 >/dev/null
+        # where one UDP query (socket mark as DnsResolver sets it) leaves:
+        # "<out interface> <source> <destination>" from counting rules
+        dns_leaves() {  # dns_leaves MARK SERVER
+            "$IPTR" -w -t mangle -F POSTROUTING
+            for o in wlan0 wgs0 rmnet1; do for s in 192.168.1.50 10.2.0.2 10.65.0.2; do for d in "$2" 10.2.0.1; do
+                "$IPTR" -w -t mangle -A POSTROUTING -o "$o" -s "$s" -d "$d" -p udp --dport 53 -j ACCEPT
+            done; done; done
+            python3 -I -c 'import socket, sys
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.setsockopt(socket.SOL_SOCKET, getattr(socket, "SO_MARK", 36), int(sys.argv[1], 16))
+try:
+    s.connect((sys.argv[2], 53)); s.send(b"q")
+except OSError:
+    pass' "$1" "$2"
+            "$IPTR" -w -t mangle -L POSTROUTING -v -n -x | awk '$1 ~ /^[0-9]+$/ && $1 > 0 { print $7, $8, $9; exit }'
+            "$IPTR" -w -t mangle -F POSTROUTING
+        }
+        check "Wi-Fi LAN resolver: stays on the LAN" "wlan0 192.168.1.50 192.168.1.1" "$(dns_leaves 0x10064 192.168.1.1)"
+        check "resolver reached through the tunnel: tunnel DNS" "wgs0 10.2.0.2 10.2.0.1" "$(dns_leaves 0x10064 198.51.100.53)"
+        check "carrier service network: its own resolver" "rmnet1 10.65.0.2 10.65.0.53" "$(dns_leaves 0xd0066 10.65.0.53)"
+        WGS_IPT=$IPTR ctl down >/dev/null
+        check "down: real nat table clean" 0 "$("$IPTR" -w -t nat -S 2>/dev/null | grep -c wgs_dns)"
+        ip rule del pref 16000 fwmark 0xd0066/0xdffff iif lo lookup 1030
+        ip link del rmnet1 2>/dev/null
+        sed -i '/^1030 /d' "$WGS_RT_TABLES"
+    fi
 fi
 
 if want busybox_path; then
