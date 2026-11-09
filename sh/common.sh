@@ -229,31 +229,33 @@ status_compat() {
 }
 status_write() {
     tmp="$STATE/status.tmp.$$"
+    # printf, not echo: mksh's echo would interpret a backslash in a value
     {
-        echo "state=$ST_STATE"
-        echo "reason=$ST_REASON"
-        echo "iface=$IFACE"
-        echo "table=$TABLE"
-        echo "type=$ST_TYPE"
-        echo "tunnel=$ST_TUNNEL"
-        echo "endpoint=$ST_ENDPOINT"
-        echo "endpoint_host=$ST_EPHOST"
-        echo "ipv6=$ST_IPV6"
-        echo "handshake_age=$ST_HSAGE"
-        echo "killswitch=$S_KILLSWITCH"
-        echo "default_net=$ST_DEF"
-        echo "android_vpn=$ST_ANDVPN"
-        echo "pause_left=$ST_PAUSELEFT"
-        echo "rx=$ST_RX"
-        echo "tx=$ST_TX"
-        echo "nets=$ST_NETS"
-        echo "recover=$ST_RECOVER"
-        echo "recover_from=$ST_RECOVER_FROM"
-        echo "autoswitch=$S_AUTOSWITCH"
-        echo "notify=$S_NOTIFY"
-        echo "profile=$S_PROFILE"
-        echo "checks=$S_CHECKS"
-        echo "updated=$(epoch_now)"
+        printf '%s\n' \
+            "state=$ST_STATE" \
+            "reason=$ST_REASON" \
+            "iface=$IFACE" \
+            "table=$TABLE" \
+            "type=$ST_TYPE" \
+            "tunnel=$ST_TUNNEL" \
+            "endpoint=$ST_ENDPOINT" \
+            "endpoint_host=$ST_EPHOST" \
+            "ipv6=$ST_IPV6" \
+            "handshake_age=$ST_HSAGE" \
+            "killswitch=$S_KILLSWITCH" \
+            "default_net=$ST_DEF" \
+            "android_vpn=$ST_ANDVPN" \
+            "pause_left=$ST_PAUSELEFT" \
+            "rx=$ST_RX" \
+            "tx=$ST_TX" \
+            "nets=$ST_NETS" \
+            "recover=$ST_RECOVER" \
+            "recover_from=$ST_RECOVER_FROM" \
+            "autoswitch=$S_AUTOSWITCH" \
+            "notify=$S_NOTIFY" \
+            "profile=$S_PROFILE" \
+            "checks=$S_CHECKS" \
+            "updated=$(epoch_now)"
     } > "$tmp" && chmod 644 "$tmp" && mv -f "$tmp" "$STATE/status"
     status_compat
 }
