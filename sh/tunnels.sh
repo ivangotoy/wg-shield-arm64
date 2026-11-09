@@ -285,9 +285,15 @@ bk_restore() {
     _br="$STATE/restore.$$"; rm -rf "$_br"; mkdir -p "$_br"; chmod 700 "$_br"
     _bk_unzip -o -q "$BKZIP" -d "$_br" >/dev/null 2>&1
     _br_ok=0; _br_bad=0; _br_names=""
+    # one file per line: names with spaces stay whole, nothing is globbed
+    _br_ifs=$IFS; IFS='
+'
+    set -f
     for _bf in $(find "$_br" -type f -name '*.conf' 2>/dev/null | sort); do
+        IFS=$_br_ifs; set +f
         if tun_import_one "$_bf"; then _br_ok=$((_br_ok + 1)); _br_names="$_br_names $name"; else _br_bad=$((_br_bad + 1)); fi
     done
+    IFS=$_br_ifs; set +f
     _br_fav=0
     if [ -f "$_br/favorites.txt" ]; then
         _br_list=$(tr -d '\r' < "$_br/favorites.txt" | while IFS= read -r _fn; do
@@ -334,10 +340,16 @@ tun_import() {
             tmp="$STATE/import.$$"; rm -rf "$tmp"; mkdir -p "$tmp"; chmod 700 "$tmp"
             if [ -x "$BB" ]; then "$BB" unzip -o -q "$p" -d "$tmp" >/dev/null 2>&1; else unzip -o -q "$p" -d "$tmp" >/dev/null 2>&1; fi
             found=0
+            # one file per line: names with spaces stay whole, nothing is globbed
+            _ti_ifs=$IFS; IFS='
+'
+            set -f
             for f in $(find "$tmp" -type f -name '*.conf' 2>/dev/null | sort); do
+                IFS=$_ti_ifs; set +f
                 found=1
                 if tun_import_one "$f"; then ok=$((ok + 1)); else bad=$((bad + 1)); fi
             done
+            IFS=$_ti_ifs; set +f
             rm -rf "$tmp"
             [ "$found" = 1 ] || { echo "ok=0"; echo "error=no .conf files in $p"; return 1; }
             ;;
