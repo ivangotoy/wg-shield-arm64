@@ -14,7 +14,7 @@
 # tun_parse FILE -> T_* variables, T_ERR empty when usable, T_WARN notes
 tun_parse() {
     T_ADDR=""; T_EP=""; T_EPIP=""; T_MTU=1420; T_KA=""; T_ERR=""; T_WARN=""; T_TYPE=wireguard; _awg=0; _hpk=0
-    _ni=0; _np=0; _pk=0; _pub=0; _psk=0; T_ADDR6=""; T_V6=0; _addr=""; _mtu=""; _dns=""; _ign=""; _aips=""; T_DNS=""
+    _ni=0; _np=0; _pk=0; _pub=0; _psk=0; T_ADDR6=""; T_V6=0; _addr=""; _mtu=""; _dns=""; _ign=""; _aips=""; T_DNS=""; T_DNS6=""
     [ -f "$1" ] || { T_ERR="file not found"; return 1; }
     _out=$(tr -d '\r' 2>/dev/null < "$1" | awk '
     function trim(s) { gsub(/[ \t]/, "", s); return s }
@@ -109,10 +109,14 @@ tun_parse() {
     case "$_mtu" in "") : ;; *[!0-9]*) T_WARN="$T_WARN bad-MTU-ignored" ;;
         *) if [ "$_mtu" -ge 1280 ] && [ "$_mtu" -le 1500 ]; then T_MTU=$_mtu; else T_WARN="$T_WARN MTU-out-of-range-ignored"; fi ;;
     esac
-    # DNS: the first IPv4 server is used while the tunnel is on (sh/net.sh
-    # dns_ensure); IPv6 servers and search domains are not used
+    # DNS: the first IPv4 server is used while the tunnel is on, the first
+    # IPv6 server while it carries IPv6 too (sh/net.sh dns_ensure); search
+    # domains are not used
     for _d in $(echo "$_dns" | tr ',' ' '); do
-        ipv4_ok "$_d" && { T_DNS=$_d; break; }
+        if ipv4_ok "$_d"; then [ -z "$T_DNS" ] && T_DNS=$_d
+        else
+            case "$_d" in *:*:*) case "$_d" in *[!0-9A-Fa-f:]*|*:::*) : ;; *) [ -z "$T_DNS6" ] && [ "${#_d}" -le 39 ] && T_DNS6=$_d ;; esac ;; esac
+        fi
     done
     [ -n "$_dns" ] && [ -z "$T_DNS" ] && T_WARN="$T_WARN DNS-without-IPv4-ignored"
     [ -n "$T_EPHOST" ] && T_WARN="$T_WARN host-name-endpoint(resolved-at-connect)"
