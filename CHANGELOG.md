@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.8-fork2 (local fork)
+## 2.8-fork2
 
 Upstream 2.8, plus:
 
