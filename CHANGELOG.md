@@ -14,6 +14,7 @@ Upstream 2.9.1, plus:
 * **A file in Download with `|` in its name** is listed, imported and deleted under its whole name (the WebUI cut it at the `|`, so Import and delete did not find it). `ctl.sh files` now prints `file=size|mtime|configs|name`, the name last
 * **Deleting a tunnel waits for a running speed test** - `ctl.sh remove` now refuses while a speed test runs, as *Delete all* already did (the test could be loading that tunnel's file)
 * **A star set during a restore is kept** - `ctl.sh fav` now writes the favorites under the watchdog lock, like restore, which rewrites them too
+* **`build.sh` checks the sources it downloads** - the wireguard-tools and amneziawg-tools tarballs against pinned SHA-256 values, the git fallback against pinned commits; a mismatch stops the build
 * README: the status file keys `pause_left`, `rx`, `tx`, `nets`
 * README, *Verify*: the command that blocks the server works for an IPv6 server too (`[2001:db8::1]:51820` was cut at the first colon); the undo removes the rule it added
 * **Test harness** - the host-name endpoint lookup (new case `resolve`); the IPv6 DNS case without ip6tables failed on a PC since 2.7 (the test left `ip6tables-save` working); `-k dns6` alone runs; `status_backslash` expects the 2.9 Endpoint error text; new cases `wait_up`, `dash_name`, `v6_address`, `outside_names`
