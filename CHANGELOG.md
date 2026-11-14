@@ -16,6 +16,7 @@ Upstream 2.9.1, plus:
 * **A star set during a restore is kept** - `ctl.sh fav` now writes the favorites under the watchdog lock, like restore, which rewrites them too
 * **`build.sh` checks the sources it downloads** - the wireguard-tools and amneziawg-tools tarballs against pinned SHA-256 values, the git fallback against pinned commits; a mismatch stops the build
 * **Boot clears what an interrupted command left in `state/`** - temp files, rule batches and the backup / restore folders of a process killed in the middle
+* **No more world-writable files** - the root manager starts the module's scripts with umask `0000` (seen on KernelSU), so `module.prop`, every file in `state/` and the log were `666`. Every script now sets umask `022`; the first boot after the update removes group / other write from `module.prop`, `state/` and `logs/` (the `600` files - tunnels, settings, favorites, speed test - stay `600`)
 * README: the status file keys `pause_left`, `rx`, `tx`, `nets`
 * README, *Verify*: the command that blocks the server works for an IPv6 server too (`[2001:db8::1]:51820` was cut at the first colon); the undo removes the rule it added
 * **Test harness** - the host-name endpoint lookup (new case `resolve`); the IPv6 DNS case without ip6tables failed on a PC since 2.7 (the test left `ip6tables-save` working); `-k dns6` alone runs; `status_backslash` expects the 2.9 Endpoint error text; new cases `wait_up`, `dash_name`, `v6_address`, `outside_names`
