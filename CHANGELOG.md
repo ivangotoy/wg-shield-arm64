@@ -20,9 +20,10 @@ Upstream 2.9.1, plus:
 * **The exit address is asked over HTTPS only** - `exitip` (Dashboard **Check**) fell back to plain HTTP (`ip-api.com`, then `ipinfo.io`) when both HTTPS services failed or the phone had no `curl`; that answer could be read and changed on the way. A third HTTPS service, `ifconfig.co`, takes its place; without `curl`, or when all three fail, Check shows an error. `proto=` stays, always `https`
 * **No more world-writable files** - the root manager starts the module's scripts with umask `0000` (seen on KernelSU), so `module.prop`, every file in `state/` and the log were `666`. Every script now sets umask `022`; the first boot after the update removes group / other write from `module.prop`, `state/` and `logs/` (the `600` files - tunnels, settings, favorites, speed test - stay `600`)
 * **A long imported file name that starts with a dot** - the name was cut to 40 characters before `tunnel_` was put in front, so the tunnel was imported and listed under a 47-character name that `up`, `remove` and the favorite star refused ("no such tunnel"); now cut after the prefix
+* **Address prefix and MTU with leading zeros** - `ip` reads `/08`, `/010` and `MTU = 01400` as octal: the tunnel came up without its address (`/08` refused), with another prefix (`/010` = `/8`) or with MTU 768 (no IPv6 on `wgs0`). The numbers are now taken as decimal, and a zero-padded prefix like `/024` is accepted
 * README: the status file keys `pause_left`, `rx`, `tx`, `nets`
 * README, *Verify*: the command that blocks the server works for an IPv6 server too (`[2001:db8::1]:51820` was cut at the first colon); the undo removes the rule it added
-* **Test harness** - the host-name endpoint lookup (new case `resolve`); the IPv6 DNS case without ip6tables failed on a PC since 2.7 (the test left `ip6tables-save` working); `-k dns6` alone runs; `status_backslash` expects the 2.9 Endpoint error text; new cases `wait_up`, `dash_name`, `v6_address`, `outside_names`, `import_long_dotname`
+* **Test harness** - the host-name endpoint lookup (new case `resolve`); the IPv6 DNS case without ip6tables failed on a PC since 2.7 (the test left `ip6tables-save` working); `-k dns6` alone runs; `status_backslash` expects the 2.9 Endpoint error text; new cases `wait_up`, `dash_name`, `v6_address`, `outside_names`, `import_long_dotname`, `leading_zero`
 
 ---
 ## 2.9.1
