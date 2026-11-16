@@ -32,10 +32,11 @@ Upstream 2.9.1, plus:
 * `ctl.sh diag` showed an empty backup date when `backup-info.txt` has no number; it shows the zip's time now, as *Backup* does
 * **The Action button's message** and the host-name lookup's answer went through `echo`: run with mksh (`/system/bin/sh`), a backslash in an error that quotes a tunnel file split the message into two lines and cut it. Printed with `printf` now
 * **`build.sh` never builds an unchecked source tree** - the git fallback cloned into the source folder before the commit was checked, and a run that stopped there (the `git checkout` failed, or the run was killed) left the folder: the next run took it as it was and built it. The source now goes to `<folder>.part` and is renamed only once it is checked
+* **Tunnel files placed by hand under a name import refuses** (spaces, `*`, a leading dot, over 40 characters) were listed as tunnels that up, remove and star then refused, and a name with a space was split into several rows; such files are no longer listed (they stay in the folder)
 * `ctl.sh` usage, Help: `exitip` asks over HTTPS only (the usage still named a plain HTTP fallback); auto-switch tries the same country first, then the other tunnels; an IPv6 endpoint is no reason for import to skip a file
 * README: the status file keys `pause_left`, `rx`, `tx`, `nets`
 * README, *Verify*: the command that blocks the server works for an IPv6 server too (`[2001:db8::1]:51820` was cut at the first colon); the undo removes the rule it added
-* **Test harness** - the host-name endpoint lookup (new case `resolve`); the IPv6 DNS case without ip6tables failed on a PC since 2.7 (the test left `ip6tables-save` working); `-k dns6` alone runs; `status_backslash` expects the 2.9 Endpoint error text; new cases `wait_up`, `dash_name`, `v6_address`, `outside_names`, `import_long_dotname`, `leading_zero`, `pause_zero`, `poll_sibling_text`, `v6_prefix`, `dns_killed`, `dns6_bad`, `build_fetch`; `dns_route`, `landns` and `dns6` check the rebuild
+* **Test harness** - the host-name endpoint lookup (new case `resolve`); the IPv6 DNS case without ip6tables failed on a PC since 2.7 (the test left `ip6tables-save` working); `-k dns6` alone runs; `status_backslash` expects the 2.9 Endpoint error text; new cases `wait_up`, `dash_name`, `v6_address`, `outside_names`, `import_long_dotname`, `leading_zero`, `pause_zero`, `poll_sibling_text`, `v6_prefix`, `dns_killed`, `dns6_bad`, `build_fetch`, `hand_names`; `dns_route`, `landns` and `dns6` check the rebuild
 
 ---
 ## 2.9.1
