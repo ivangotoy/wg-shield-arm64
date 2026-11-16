@@ -4,7 +4,7 @@
 
 Upstream 2.9.1, plus:
 
-* **No update offer from upstream** - `module.prop` has no `updateJson` line any more: the root manager would otherwise offer upstream's next release as an update over this fork. Updates of the fork are installed from its own zip
+* **Updates from the fork, not from upstream** - `module.prop`'s `updateJson` points at this fork's `update.json` (GitHub fork `ivangotoy/wg-shield-arm64`), and its `zipUrl` points at the fork's GitHub release `v2.9.1-fork1`, asset `wg-shield-arm64-v2.9.1-fork1.zip`, instead of upstream's: the root manager does not offer upstream's release over this fork. `update.json` keeps `version` and `versionCode` equal to `module.prop`
 * **`up` waits for the first handshake again** - `ctl.sh up`, the Action button, resume and restart are meant to tick for up to 6 seconds while the tunnel connects; a shared counter ended that wait after the first second, so they answered "connecting" although the handshake came a moment later
 * **Tunnel names that start with a dash** (`-home`, allowed by the WireGuard app too) - the favorite star could not be set or cleared, a backup held no tunnel at all although it reported them as saved, and names like `-n` were missing from the list
 * **IPv6 through the tunnel with a tunnel address in a long form** - `Address = 10.2.0.2/32, FD00:0:0:0::2/128` was added to `wgs0` but never recognised (the system lists it as `fd00::2`), so IPv6 stayed blocked instead of going through the tunnel

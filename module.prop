@@ -4,4 +4,5 @@ version=2.9.1-fork1
 versionCode=16
 author=Tears Burn
 description=Always-on kernel WireGuard / AmneziaWG tunnel without an app, with kill switch. Status: Init
+updateJson=https://raw.githubusercontent.com/ivangotoy/wg-shield-arm64/main/update.json
 banner=wg-shield.png

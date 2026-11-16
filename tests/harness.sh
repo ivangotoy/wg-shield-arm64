@@ -1631,7 +1631,7 @@ if want backslash_out; then
     sed -i 's#^Endpoint = .*#Endpoint = x\\nupdateJson=u:1#' "$WGS_DATA/tunnels/wg-BS-1.conf"
     ctl status >/dev/null
     check "state error with the text in its reason" "error 1" "$(st state) $(st reason | grep -cF 'x\nupdateJson=u:1')"
-    check "module.prop: still one description line, no line added" "$lines0 1 0" "$(grep -c . "$MOD/module.prop") $(grep -c '^description=' "$MOD/module.prop") $(grep -c '^updateJson=' "$MOD/module.prop")"
+    check "module.prop: still one description line, no line added" "$lines0 1 1" "$(grep -c . "$MOD/module.prop") $(grep -c '^description=' "$MOD/module.prop") $(grep -c '^updateJson=' "$MOD/module.prop")"
     out=$(ctl up wg-BS-1 2>&1)
     check "up refused: one error line, nothing else" "2 1 0" "$(echo "$out" | grep -c .) $(echo "$out" | grep -c '^error=tunnel wg-BS-1 is invalid') $(echo "$out" | grep -c '^updateJson=')"
     check "list: one line for the tunnel" "1 0" "$(ctl list | grep -c '^tunnel=wg-BS-1 invalid=1') $(ctl list | grep -c '^updateJson=')"
@@ -1659,12 +1659,13 @@ fi
 if want module_prop; then
     echo "module_prop: the fork's module.prop"
     reset_state
-    check "no updateJson line (the manager must not offer upstream's release)" 0 "$(grep -c '^updateJson=' "$REPO/module.prop")"
+    check "updateJson: one line, the fork's update.json, nothing of upstream" "1 1 0" "$(grep -c '^updateJson=' "$REPO/module.prop") $(grep -cxF 'updateJson=https://raw.githubusercontent.com/ivangotoy/wg-shield-arm64/main/update.json' "$REPO/module.prop") $(cat "$REPO/module.prop" "$REPO/update.json" | grep -ci nikakvo)"
+    check "update.json: version and versionCode as in module.prop, the fork's zip" "1 1 1" "$(grep -cF "\"version\": \"$(sed -n 's/^version=//p' "$REPO/module.prop")\"," "$REPO/update.json") $(grep -cF "\"versionCode\": $(sed -n 's/^versionCode=//p' "$REPO/module.prop")," "$REPO/update.json") $(grep -c '"zipUrl": "https://github.com/ivangotoy/wg-shield-arm64/releases/download/' "$REPO/update.json")"
     conf "$WGS_DL/wg-MP-1.conf" 203.0.113.90:51820
     ctl import wg-MP-1.conf >/dev/null
     date +%s > "$STATE/fake_hs"
     ctl up wg-MP-1 >/dev/null
-    check "status line written into the description, the other lines kept" "1 1 1 1 0" "$(grep -c '^description=.*Status: .*Protected' "$MOD/module.prop") $(grep -c '^id=wg-shield$' "$MOD/module.prop") $(grep -c '^version=' "$MOD/module.prop") $(grep -c '^versionCode=' "$MOD/module.prop") $(grep -c '^updateJson=' "$MOD/module.prop")"
+    check "status line written into the description, the other lines kept" "1 1 1 1 1" "$(grep -c '^description=.*Status: .*Protected' "$MOD/module.prop") $(grep -c '^id=wg-shield$' "$MOD/module.prop") $(grep -c '^version=' "$MOD/module.prop") $(grep -c '^versionCode=' "$MOD/module.prop") $(grep -cxF 'updateJson=https://raw.githubusercontent.com/ivangotoy/wg-shield-arm64/main/update.json' "$MOD/module.prop")"
     ctl down >/dev/null
 fi
 
