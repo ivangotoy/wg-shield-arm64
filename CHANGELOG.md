@@ -30,6 +30,7 @@ Upstream 2.9.1, plus:
 * **An IPv6 Address of `::`, `::1` or a multicast address** (`ff02::5`) passed the import like a usable one; `ip -6 addr add` refuses these on an interface, so the tunnel was listed with IPv6 and came up without it. Now ignored with the note `bad-IPv6-address-ignored`
 * **An IPv6 DNS server that is not an address** - the DNS line's IPv6 entries were checked for their characters only: the first one that passed (`fd00::1::2`, nine groups, a group of five digits) was taken as the tunnel's IPv6 DNS, `ip6tables` refused it, and a valid IPv6 server later in the line was never used. Such an entry is now skipped
 * `ctl.sh diag` showed an empty backup date when `backup-info.txt` has no number; it shows the zip's time now, as *Backup* does
+* **The Action button's message** and the host-name lookup's answer went through `echo`: run with mksh (`/system/bin/sh`), a backslash in an error that quotes a tunnel file split the message into two lines and cut it. Printed with `printf` now
 * `ctl.sh` usage, Help: `exitip` asks over HTTPS only (the usage still named a plain HTTP fallback); auto-switch tries the same country first, then the other tunnels; an IPv6 endpoint is no reason for import to skip a file
 * README: the status file keys `pause_left`, `rx`, `tx`, `nets`
 * README, *Verify*: the command that blocks the server works for an IPv6 server too (`[2001:db8::1]:51820` was cut at the first colon); the undo removes the rule it added
