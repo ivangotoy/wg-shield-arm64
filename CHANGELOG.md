@@ -41,7 +41,7 @@ Upstream 2.9.1, plus:
 * `ctl.sh` usage, Help: `exitip` asks over HTTPS only (the usage still named a plain HTTP fallback); auto-switch tries the same country first, then the other tunnels; an IPv6 endpoint is no reason for import to skip a file
 * README: the status file keys `pause_left`, `rx`, `tx`, `nets`
 * README, *Verify*: the command that blocks the server works for an IPv6 server too (`[2001:db8::1]:51820` was cut at the first colon); the undo removes the rule it added
-* **Test harness** - the host-name endpoint lookup (new case `resolve`); the IPv6 DNS case without ip6tables failed on a PC since 2.7 (the test left `ip6tables-save` working); `-k dns6` alone runs; `status_backslash` expects the 2.9 Endpoint error text; new cases `wait_up`, `dash_name`, `v6_address`, `outside_names`, `import_long_dotname`, `leading_zero`, `pause_zero`, `poll_sibling_text`, `v6_prefix`, `dns_killed`, `dns6_bad`, `build_fetch`, `hand_names`, `ks_error6`, `landns6`, `backup_names`, `files_newline`, `import_case`; `dns_route`, `landns` and `dns6` check the rebuild
+* **Test harness** - the host-name endpoint lookup (new case `resolve`); the IPv6 DNS case without ip6tables failed on a PC since 2.7 (the test left `ip6tables-save` working); `-k dns6` alone runs; `status_backslash` expects the 2.9 Endpoint error text; new cases `wait_up`, `dash_name`, `v6_address`, `outside_names`, `import_long_dotname`, `leading_zero`, `pause_zero`, `poll_sibling_text`, `v6_prefix`, `dns_killed`, `dns6_bad`, `build_fetch`, `hand_names`, `ks_error6`, `landns6`, `backup_names`, `files_newline`, `import_case`, `resolve_backslash`; `dns_route`, `landns` and `dns6` check the rebuild
 
 ---
 ## 2.9.1
