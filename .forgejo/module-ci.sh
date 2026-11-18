@@ -8,7 +8,9 @@
 #                                   push merge -> publish -> commit update.json
 # The release step runs this script and the config as fetched from the dispatched
 # commit, never the copies in the build workspace. Any failure before publish
-# deletes the draft and pushes nothing.
+# deletes the draft. The merge with upstream is pushed to main right before the
+# publish call, so a failure before that push pushes nothing, and a failed
+# publish leaves the merge on main (without a release).
 #
 # Per-repo settings: .forgejo/module-ci.conf (sourced shell)
 #   UPSTREAM_URL, UPSTREAM_BRANCH   upstream merged into main ("" = none)
@@ -38,6 +40,7 @@ log() { printf '==> %s\n' "$*" >&2; }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 prop_get() { sed -n "s/^$1=//p" "$2" | head -n1 | tr -d '\r'; }
 sha() { sha256sum "$1" | cut -d' ' -f1; }
+sedq() { printf '%s' "$1" | sed 's/[\\|&]/\\&/g'; }  # text for the replacement of a s|...|...| command
 jget() { python3 -I -c 'import json,sys;d=json.load(sys.stdin)
 for k in sys.argv[1].split("."): d=d[int(k)] if k.isdigit() else d[k]
 print(d)' "$1"; }
@@ -99,16 +102,31 @@ fi
 [ "$MODE" = release ] || die "unknown mode $MODE"
 : "${RELEASE_TOKEN:?}" "${RUN_NUMBER:?}"
 API="$SERVER_URL/api/v1/repos/$REPOSITORY"
+# The token never goes into argv: curl reads the header from a 0600 file that is removed
+# on exit, git gets it through GIT_CONFIG_* environment variables
+AUTH_DIR="$(mktemp -d)"
+trap 'rm -rf "$AUTH_DIR"' EXIT
+AUTH_H="$AUTH_DIR/header"
+(umask 077; printf 'Authorization: token %s\n' "$RELEASE_TOKEN" > "$AUTH_H")
 auth() { printf 'Authorization: token %s' "$RELEASE_TOKEN"; }
-api() { local m="$1" p="$2"; shift 2; curl -sS --fail-with-body --retry 3 -X "$m" -H "$(auth)" "$@" "$API$p"; }
-http_code() { curl -sS -o /dev/null -w '%{http_code}' -H "$(auth)" "$API$1"; }
-git_auth() { git -c "http.extraHeader=$(auth)" "$@"; }
+# Only reads are retried: a retried POST/PATCH/DELETE can repeat a change the forge made
+api() {
+    local m="$1" p="$2" r=""; shift 2
+    case "$m" in GET|HEAD) r="--retry 3" ;; esac
+    curl -sS --connect-timeout 30 --max-time 600 --fail-with-body $r -X "$m" -H "@$AUTH_H" "$@" "$API$p"
+}
+http_code() { curl -sS --connect-timeout 30 --max-time 600 -o /dev/null -w '%{http_code}' -H "@$AUTH_H" "$API$1"; }
+git_auth() {
+    (n="${GIT_CONFIG_COUNT:-0}"
+     export GIT_CONFIG_COUNT=$((n + 1)) "GIT_CONFIG_KEY_$n=http.extraHeader" "GIT_CONFIG_VALUE_$n=$(auth)"
+     git "$@")
+}
 
 REL="$(pwd)/rel"
 rm -rf "$REL"; mkdir -p "$REL"
 git_auth clone -q --branch main "$SERVER_URL/$REPOSITORY.git" "$REL/repo"
 cd "$REL/repo"
-git cat-file -e "$BASE_SHA^{commit}" || die "base $BASE_SHA not in main"
+git cat-file -e "$BASE_SHA^{commit}" && git merge-base --is-ancestor "$BASE_SHA" HEAD || die "base $BASE_SHA not in main"
 git show "$BASE_SHA:.forgejo/module-ci.conf" > "$REL/module-ci.conf"
 load_conf "$REL/module-ci.conf"
 
@@ -208,6 +226,7 @@ cleanup() {
         log "failure before publish: deleting draft release $RELEASE_ID"
         api DELETE "/releases/$RELEASE_ID" >/dev/null || true
     fi
+    rm -rf "$AUTH_DIR"
     exit "$rc"
 }
 trap cleanup EXIT
@@ -223,7 +242,7 @@ log "draft release $RELEASE_ID, uploading $ZIP_NAME"
 ASSET_ID="$(api POST "/releases/$RELEASE_ID/assets?name=$ZIP_NAME" -F "attachment=@$ZIP" | jget id)"
 ASSET_URL="$(api GET "/releases/$RELEASE_ID/assets/$ASSET_ID" | jget browser_download_url)"
 log "downloading back $ASSET_URL"
-curl -sSL --fail-with-body -H "$(auth)" -o "$REL/back.zip" "$ASSET_URL"
+curl -sSL --connect-timeout 30 --max-time 600 --fail-with-body -H "@$AUTH_H" -o "$REL/back.zip" "$ASSET_URL"
 [ "$(sha "$REL/back.zip")" = "$ZIP_SHA" ] || die "downloaded asset sha256 differs"
 unzip -tq "$REL/back.zip" >/dev/null || die "downloaded asset fails zip test"
 
@@ -237,7 +256,7 @@ api PATCH "/releases/$RELEASE_ID" -H 'Content-Type: application/json' -d "$REQ" 
 PUBLISHED=1
 TAG_SHA="$(api GET "/tags/$TAG" | jget commit.sha)"
 [ "$TAG_SHA" = "$SRC_SHA" ] || die "published tag $TAG points at $TAG_SHA, expected $SRC_SHA"
-for i in 1 2 3 4 5; do curl -fsSL -o "$REL/anon.zip" "$ZIP_URL" && break; sleep 5; done
+for i in 1 2 3 4 5; do curl -fsSL --connect-timeout 30 --max-time 600 -o "$REL/anon.zip" "$ZIP_URL" && break; sleep 5; done
 [ "$(sha "$REL/anon.zip")" = "$ZIP_SHA" ] || die "anonymous download of $ZIP_URL differs"
 log "published $TAG"
 
@@ -258,14 +277,14 @@ if declare -F release_files >/dev/null; then
     for f in $RELEASE_FILES; do git add -- "$f"; done
 fi
 if [ -n "$SYNC_ROOT_PROP" ]; then
-    sed -i -E "s|^version=.*|version=$VERSION|; s|^versionCode=.*|versionCode=$VC|; s|^updateJson=.*|updateJson=$UPDATE_URL|" "$SYNC_ROOT_PROP"
+    sed -i -E "s|^version=.*|version=$(sedq "$VERSION")|; s|^versionCode=.*|versionCode=$VC|; s|^updateJson=.*|updateJson=$(sedq "$UPDATE_URL")|" "$SYNC_ROOT_PROP"
     git add -- "$SYNC_ROOT_PROP"
 fi
 git commit -q -m "update.json: $VERSION (versionCode $VC)"
 git_auth push -q origin HEAD:refs/heads/main || die "push of update.json failed"
 got=""
 for i in 1 2 3 4 5; do
-    got="$(curl -fsS "$UPDATE_URL" | jget versionCode || true)"
+    got="$(curl -fsS --connect-timeout 30 --max-time 600 "$UPDATE_URL" | jget versionCode || true)"
     [ "$got" = "$VC" ] && break; sleep 5
 done
 [ "$got" = "$VC" ] || die "$UPDATE_URL answers versionCode '$got', expected $VC"
