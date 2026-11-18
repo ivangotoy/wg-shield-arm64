@@ -83,14 +83,27 @@ if [ "$MODE" = build ]; then
     mkdir -p "$WORK/.ci-home"
     chown -R "$BUILD_UID:$BUILD_UID" "$WORK" "$OUT"
     log "building $SRC_SHA as uid $BUILD_UID"
-    env -i PATH="$PATH" HOME="$WORK/.ci-home" LANG=C.UTF-8 GRADLE_USER_HOME=/ci/gradle \
-        JAVA_HOME="${JAVA_HOME:-}" JAVA_HOME_21="${JAVA_HOME_21:-}" JAVA_HOME_26="${JAVA_HOME_26:-}" \
-        ANDROID_HOME=/opt/android-sdk ANDROID_SDK_ROOT=/opt/android-sdk \
-        SIGN_KEYSTORE_B64="${SIGN_KEYSTORE_B64:-}" SIGN_KEY_ALIAS="${SIGN_KEY_ALIAS:-}" \
-        SIGN_STORE_PASSWORD="${SIGN_STORE_PASSWORD:-}" SIGN_KEY_PASSWORD="${SIGN_KEY_PASSWORD:-}" \
-        SERVER_URL="$SERVER_URL" REPOSITORY="$REPOSITORY" BASE_SHA="$BASE_SHA" OUT="$OUT" \
-        setpriv --reuid="$BUILD_UID" --regid="$BUILD_UID" --clear-groups \
-        bash "$WORK/.forgejo/module-ci.sh" build-user "$WORK" || die "build failed"
+    # The build user gets exactly the variables below. The signing secrets go by environment only,
+    # never as argv (an `env -i NAME=value` argv is readable in /proc by other local users): unset
+    # every other exported variable, export these with the builtin, and let env(1) drop by name
+    # whatever bash cannot unset (readonly variables, names that are not identifiers, exported functions).
+    (   keep=" PATH JAVA_HOME JAVA_HOME_21 JAVA_HOME_26 SIGN_KEYSTORE_B64 SIGN_KEY_ALIAS SIGN_STORE_PASSWORD SIGN_KEY_PASSWORD SERVER_URL REPOSITORY BASE_SHA "
+        drop=()
+        for v in $(compgen -e); do
+            case "$keep" in *" $v "*) ;; *) unset "$v" 2>/dev/null || drop+=(-u "$v") ;; esac
+        done
+        while IFS= read -r -d '' e; do
+            [[ "${e%%=*}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || drop+=(-u "${e%%=*}")
+        done < "/proc/$BASHPID/environ"
+        export PATH HOME="$WORK/.ci-home" LANG=C.UTF-8 GRADLE_USER_HOME=/ci/gradle \
+            JAVA_HOME="${JAVA_HOME:-}" JAVA_HOME_21="${JAVA_HOME_21:-}" JAVA_HOME_26="${JAVA_HOME_26:-}" \
+            ANDROID_HOME=/opt/android-sdk ANDROID_SDK_ROOT=/opt/android-sdk \
+            SIGN_KEYSTORE_B64="${SIGN_KEYSTORE_B64:-}" SIGN_KEY_ALIAS="${SIGN_KEY_ALIAS:-}" \
+            SIGN_STORE_PASSWORD="${SIGN_STORE_PASSWORD:-}" SIGN_KEY_PASSWORD="${SIGN_KEY_PASSWORD:-}" \
+            SERVER_URL="$SERVER_URL" REPOSITORY="$REPOSITORY" BASE_SHA="$BASE_SHA" OUT="$OUT"
+        exec env ${drop[@]+"${drop[@]}"} setpriv --reuid="$BUILD_UID" --regid="$BUILD_UID" --clear-groups \
+            bash "$WORK/.forgejo/module-ci.sh" build-user "$WORK"
+    ) || die "build failed"
     setpriv --reuid="$BUILD_UID" --regid="$BUILD_UID" --clear-groups kill -9 -1 2>/dev/null || true
     [ -f "$OUT/module.zip" ] || die "build left no $OUT/module.zip"
     [ -f "$OUT/upstream-desc" ] && DESC="$(head -n1 "$OUT/upstream-desc")"
