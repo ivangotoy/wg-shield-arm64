@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+* **A tunnel imported from an export file ending in `.CONF`** (any letter case) kept the ending in its name (`GAMMA.CONF` instead of `GAMMA`); the ending is cut in any case now, as for `.conf`. A tunnel imported that way by 2.9.1-fork2 keeps its old name; importing the file again adds it under the short name, and the old one is removed by hand
+
 ## 2.9.1-fork2
 
 2.9.1-fork1, plus:
