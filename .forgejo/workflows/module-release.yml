@@ -33,5 +33,5 @@ jobs:
           RUN_NUMBER: ${{ github.run_number }}
         run: |
           set -eu
-          curl -fsS -o module-ci.sh "$SERVER_URL/$REPOSITORY/raw/commit/$BASE_SHA/.forgejo/module-ci.sh"
+          curl -fsS --connect-timeout 30 --max-time 120 -o module-ci.sh "$SERVER_URL/$REPOSITORY/raw/commit/$BASE_SHA/.forgejo/module-ci.sh"
           bash module-ci.sh release src
