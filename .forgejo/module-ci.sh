@@ -21,6 +21,10 @@
 #   build()                         runs in the tree, leaves the module zip at "$OUT/module.zip"
 #   prebuilt()                      instead of merge + build: puts an upstream release zip at
 #                                   "$OUT/module.zip" and a one-line source note in "$OUT/upstream-desc"
+#   release_files()                 optional, release step: writes extra fork-only files for the
+#                                   update.json commit (in-app update feeds) and lists them in
+#                                   RELEASE_FILES; sees VERSION VC TAG ZIP_NAME ZIP_URL ZIP_SHA ZIP_SIZE
+#                                   BUILT_VERSION SRC_SHA BODY CHANGELOG_URL UPDATE_URL
 set -euo pipefail
 
 MODE="${1:?mode}"; WORK="$(cd "${2:?workdir}" && pwd)"
@@ -248,6 +252,11 @@ with open(path, "w") as f:
     f.write(json.dumps({"version": version, "versionCode": int(vc), "zipUrl": zip_url, "changelog": changelog}, indent=2) + "\n")
 PY
 git add -- "$UPDATE_JSON_PATH"
+if declare -F release_files >/dev/null; then
+    RELEASE_FILES="" ZIP_SIZE="$(stat -c %s "$ZIP")"
+    release_files
+    for f in $RELEASE_FILES; do git add -- "$f"; done
+fi
 if [ -n "$SYNC_ROOT_PROP" ]; then
     sed -i -E "s|^version=.*|version=$VERSION|; s|^versionCode=.*|versionCode=$VC|; s|^updateJson=.*|updateJson=$UPDATE_URL|" "$SYNC_ROOT_PROP"
     git add -- "$SYNC_ROOT_PROP"
