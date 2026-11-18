@@ -16,10 +16,6 @@ jobs:
           SERVER_URL: ${{ github.server_url }}
           REPOSITORY: ${{ github.repository }}
           BASE_SHA: ${{ github.sha }}
-          SIGN_KEYSTORE_B64: ${{ secrets.SIGN_KEYSTORE_B64 }}
-          SIGN_KEY_ALIAS: ${{ secrets.SIGN_KEY_ALIAS }}
-          SIGN_STORE_PASSWORD: ${{ secrets.SIGN_STORE_PASSWORD }}
-          SIGN_KEY_PASSWORD: ${{ secrets.SIGN_KEY_PASSWORD }}
         run: |
           set -eu
           git clone -q --branch main "$SERVER_URL/$REPOSITORY.git" src
