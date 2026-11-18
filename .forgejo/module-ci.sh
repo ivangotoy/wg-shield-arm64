@@ -55,6 +55,7 @@ if [ "$MODE" = build ]; then
     cd "$WORK"; load_conf .forgejo/module-ci.conf
     rm -rf "$OUT"; mkdir -p "$OUT"
     git checkout -q -B main "$BASE_SHA"
+    printf '.ci-out/\n.ci-home/\n' >> .git/info/exclude
     SRC_SHA="$BASE_SHA" UP_SHA="" DESC=""
     if ! declare -F prebuilt >/dev/null && [ -n "$UPSTREAM_URL" ]; then
         log "merging $UPSTREAM_URL $UPSTREAM_BRANCH"
@@ -107,7 +108,9 @@ git cat-file -e "$BASE_SHA^{commit}" || die "base $BASE_SHA not in main"
 git show "$BASE_SHA:.forgejo/module-ci.conf" > "$REL/module-ci.conf"
 load_conf "$REL/module-ci.conf"
 
-# build results are data: check them before use
+# build results are data owned by the build user: regular files only, checked before use
+regular() { [ -f "$1" ] && [ ! -L "$1" ] || die "$1 is not a regular file"; }
+regular "$OUT/src"; regular "$OUT/desc"; regular "$OUT/module.zip"
 { read -r SRC_SHA; read -r UP_SHA; } < "$OUT/src"
 DESC="$(head -c 200 "$OUT/desc" | head -n1 | tr -cd '[:print:]')"
 [[ "$SRC_SHA" =~ ^[0-9a-f]{40}$ ]] || die "bad source sha"
@@ -115,6 +118,7 @@ if [ "$SRC_SHA" != "$BASE_SHA" ]; then
     [[ "$UP_SHA" =~ ^[0-9a-f]{40}$ ]] || die "bad upstream sha"
     git fetch -q "$UPSTREAM_URL" "$UPSTREAM_BRANCH"
     git merge-base --is-ancestor "$UP_SHA" FETCH_HEAD || die "$UP_SHA is not on upstream $UPSTREAM_BRANCH"
+    regular "$OUT/merge.bundle"
     git fetch -q "$OUT/merge.bundle" "main:refs/ci/merge"
     [ "$(git rev-parse refs/ci/merge)" = "$SRC_SHA" ] || die "bundle tip differs from the built sha"
     [ "$(git rev-parse "$SRC_SHA^1") $(git rev-parse "$SRC_SHA^2")" = "$BASE_SHA $UP_SHA" ] || die "merge parents differ"
@@ -159,19 +163,27 @@ for k, v in (("version", version), ("versionCode", vc), ("updateJson", url)):
     if k not in seen:
         lines.append(f"{k}={v}")
 prop = ("\n".join(lines) + "\n").encode()
+# install-time checks that pin module.prop (module.prop.sha256, verify scripts listing
+# its sha256) are updated by replacing the old hash wherever an entry holds it
+old_h = hashlib.sha256(zin.read("module.prop")).hexdigest().encode()
+new_h = hashlib.sha256(prop).hexdigest().encode()
 with zipfile.ZipFile(dst, "w") as zout:
     for info in zin.infolist():
         data = zin.read(info)
         if info.filename == "module.prop":
             data = prop
-        elif info.filename == "module.prop.sha256":
-            data = hashlib.sha256(prop).hexdigest().encode()
+        elif old_h in data:
+            data = data.replace(old_h, new_h)
+            print(f"==> module.prop hash updated in {info.filename}", file=sys.stderr)
         zi = zipfile.ZipInfo(info.filename, info.date_time)
         zi.compress_type, zi.external_attr, zi.create_system = info.compress_type, info.external_attr, info.create_system
         zout.writestr(zi, data, compresslevel=9 if info.compress_type == zipfile.ZIP_DEFLATED else None)
 # every <file>.sha256 entry must hold the hash of <file>
 z = zipfile.ZipFile(dst)
 names = set(z.namelist())
+for n in names:
+    if n != "module.prop" and old_h != new_h and old_h in z.read(n):
+        sys.exit(f"{n} still holds the old module.prop hash")
 for n in names:
     if n.endswith(".sha256") and n[:-7] in names:
         want = z.read(n).decode().split()[0].strip()
