@@ -1,0 +1,37 @@
+# Builds the module from main merged with upstream, releases it on this forge and
+# points the module's updateJson at this repo. Logic: .forgejo/module-ci.sh,
+# per-repo settings: .forgejo/module-ci.conf.
+name: module-release
+
+on:
+  workflow_dispatch:
+
+jobs:
+  release:
+    runs-on: kernelsu-ci
+    timeout-minutes: 170
+    steps:
+      - name: Build (no forge token, unprivileged build user)
+        env:
+          SERVER_URL: ${{ github.server_url }}
+          REPOSITORY: ${{ github.repository }}
+          BASE_SHA: ${{ github.sha }}
+          SIGN_KEYSTORE_B64: ${{ secrets.SIGN_KEYSTORE_B64 }}
+          SIGN_KEY_ALIAS: ${{ secrets.SIGN_KEY_ALIAS }}
+          SIGN_STORE_PASSWORD: ${{ secrets.SIGN_STORE_PASSWORD }}
+          SIGN_KEY_PASSWORD: ${{ secrets.SIGN_KEY_PASSWORD }}
+        run: |
+          set -eu
+          git clone -q --branch main "$SERVER_URL/$REPOSITORY.git" src
+          bash src/.forgejo/module-ci.sh build src
+      - name: Release (script and config from the dispatched commit)
+        env:
+          RELEASE_TOKEN: ${{ secrets.MODULE_RELEASE_TOKEN }}
+          SERVER_URL: ${{ github.server_url }}
+          REPOSITORY: ${{ github.repository }}
+          BASE_SHA: ${{ github.sha }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          set -eu
+          curl -fsS -o module-ci.sh "$SERVER_URL/$REPOSITORY/raw/commit/$BASE_SHA/.forgejo/module-ci.sh"
+          bash module-ci.sh release src
