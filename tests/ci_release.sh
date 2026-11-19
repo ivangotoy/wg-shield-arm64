@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # WG Shield Arm64 - offline check of the release pipeline (.forgejo/module-ci.sh).
 #
-#   bash tests/ci_release.sh SCRIPT DIR
+#   bash tests/ci_release.sh SCRIPT DIR [TREE]
 #
 # Runs SCRIPT (module-ci.sh) in release mode against a fake forge: curl is a
 # stub that answers the forge API, git is the real one on a local bare repo
@@ -12,8 +12,11 @@
 #   upload_fail   the asset upload fails while the release is a draft
 #   patch_lost    the publish PATCH is applied, its reply is lost
 #   ok            the whole run: draft, upload, check, publish, update.json
+#   build         (with TREE, a module source tree) the build step's own
+#                 part (build-user) with TREE's module-ci.conf: what the
+#                 module zip holds at its top level
 set -u
-S=$(readlink -f "$1"); D=$2
+S=$(readlink -f "$1"); D=$2; TREE=${3:-}
 rm -rf "$D"; mkdir -p "$D/bin" "$D/home" "$D/tmp" "$D/seed"
 D=$(cd "$D" && pwd)
 FORGE=https://forge.example.invalid
@@ -113,3 +116,13 @@ with zipfile.ZipFile(sys.argv[1], "w", zipfile.ZIP_DEFLATED) as z:
         *) echo "$mode: rc=$rc delete=$del token_in_argv=$tok main_moved=$([ "$head0" != "$(git --git-dir="$BARE" rev-parse main)" ] && echo yes || echo no)" ;;
     esac
 done
+
+if [ -n "$TREE" ]; then
+    W="$D/build"; mkdir -p "$W"
+    tar -C "$TREE" --exclude=./.git --exclude=./tests/.run -cf - . | tar -C "$W" -xf -
+    rm -rf "$W/.ci-out"; mkdir -p "$W/.ci-out"
+    ( cd "$W" && env PATH="$D/bin:$PATH" HOME="$D/home" TMPDIR="$D/tmp" SERVER_URL="$FORGE" REPOSITORY=o/r BASE_SHA="$BASE" \
+        bash "$S" build-user "$W" > "$D/build.log" 2>&1 )
+    rc=$?
+    echo "build: rc=$rc top=$(unzip -Z1 "$W/.ci-out/module.zip" 2>/dev/null | cut -d/ -f1 | LC_ALL=C sort -u | tr '\n' ' ' | sed 's/ $//')"
+fi

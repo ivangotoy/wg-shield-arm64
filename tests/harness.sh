@@ -2337,10 +2337,12 @@ fi
 
 if want ci_release; then
     echo "ci_release: the release pipeline (.forgejo/module-ci.sh) against a fake forge - stub curl, local git, made-up token"
-    out=$(bash "$REPO/tests/ci_release.sh" "$REPO/.forgejo/module-ci.sh" "$RUN/ci" 2>&1)
+    out=$(bash "$REPO/tests/ci_release.sh" "$REPO/.forgejo/module-ci.sh" "$RUN/ci" "$REPO" 2>&1)
     check "upload fails while a draft: the draft deleted, main untouched" "upload_fail: rc=1 delete=1 token_in_argv=0 main_moved=no" "$(echo "$out" | grep '^upload_fail: ')"
     check "publish applied, its reply lost: the release not deleted" "patch_lost: rc=52 delete=0 token_in_argv=0 main_moved=no" "$(echo "$out" | grep '^patch_lost: ')"
     check "whole run: published, update.json and module.prop on main" "ok: rc=0 delete=0 token_in_argv=0 draft=False main_moved=yes|ok_update_json: 1.0-ci3 5 https://forge.example.invalid/o/r/releases/download/v1.0-ci3/demo-v1.0-ci3.zip|ok_module_prop: version=1.0-ci3 versionCode=5 updateJson=https://forge.example.invalid/o/r/raw/branch/main/update.json" "$(echo "$out" | grep '^ok' | tr '\n' '|' | sed 's/|$//')"
+    check "build step: the zip holds the module's files and THIRD_PARTY_NOTICES.md" "build: rc=0 top=LICENSE META-INF THIRD_PARTY_NOTICES.md action.sh ctl.sh customize.sh module.prop post-fs-data.sh service.sh sh system uninstall.sh webroot wg-shield.png" "$(echo "$out" | grep '^build: ')"
+    check "build step: the copy of the tree holds no test run" no "$([ -e "$RUN/ci/build/tests/.run" ] && echo yes || echo no)"
 fi
 
 echo

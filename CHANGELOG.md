@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+* **The module zip carries `THIRD_PARTY_NOTICES.md`** - the zip built by the release pipeline holds `system/bin/wg` and `system/bin/awg` (wireguard-tools, amneziawg-tools, GPL-2.0) but only the module's own `LICENSE` (MIT); the notices file that names their license and source is packed next to it now
+* **Test harness** - new case `ci_release`: the release pipeline (`.forgejo/module-ci.sh`) runs offline against a fake forge (stub `curl`, a local git repo, a made-up token) - a draft whose upload failed is deleted, a release whose publish reply was lost is kept, a whole run commits `update.json` and `module.prop`, the token never appears in `curl`'s arguments, and the build step packs the module's files
+
 ## 2.9.1-fork3
 
 2.9.1-fork2, plus:
