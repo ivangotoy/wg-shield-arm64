@@ -12,6 +12,10 @@
 #   upload_fail   the asset upload fails while the release is a draft
 #   patch_lost    the publish PATCH is applied, its reply is lost
 #   ok            the whole run: draft, upload, check, publish, update.json
+#   post_lost     the release POST is applied, its reply is lost: the draft
+#                 is found in the release list (exact tag, draft) and deleted
+#   post_lost_two the same, but the list holds two such drafts: none deleted
+#   post_lost_nolist  the same, but the list cannot be read: none deleted
 #   build         (with TREE, a module source tree) the build step's own
 #                 part (build-user) with TREE's module-ci.conf: what the
 #                 module zip holds at its top level
@@ -43,7 +47,7 @@ printf '[url "%s"]\n\tinsteadOf = %s/o/r.git\n' "$BARE" "$FORGE" > "$D/gitconfig
 
 # curl: the forge. State in $CI_FAKE (draft, the uploaded asset), every call
 # as "METHOD URL-path" in $CI_FAKE/calls; a call whose arguments hold the
-# token is noted as TOKEN-IN-ARGV. CI_FAKE_MODE: upload_fail | patch_lost | ok
+# token is noted as TOKEN-IN-ARGV. CI_FAKE_MODE: a scenario name above
 cat > "$D/bin/curl" <<'EOF'
 #!/bin/sh
 F=$CI_FAKE; m=GET; o=""; w=""; fa=""; u=""
@@ -68,7 +72,20 @@ case "$m $p" in
     "GET $A/releases/tags/"*|"GET $A/tags/"*)
         if [ -n "$w" ]; then printf 404; exit 0; fi
         printf '{"commit": {"sha": "%s"}}\n' "$CI_FAKE_SHA" ;;
-    "POST $A/releases") echo True > "$F/draft"; echo '{"id": 7}' ;;
+    "POST $A/releases")
+        echo True > "$F/draft"
+        case "$CI_FAKE_MODE" in post_lost*) exit 52 ;; esac
+        echo '{"id": 7}' ;;
+    "GET $A/releases?"*)
+        # the draft list (drafts=true&q=TAG): Forgejo matches q as a substring;
+        # the release itself, a draft whose tag only contains it, a release
+        # that is no draft
+        [ "$CI_FAKE_MODE" = post_lost_nolist ] && exit 22
+        q=${p#*q=}; q=${q%%&*}
+        printf '[{"id": 8, "tag_name": "%s0", "draft": true}, {"id": 11, "tag_name": "%s", "draft": false}' "$q" "$q"
+        [ -f "$F/draft" ] && printf ', {"id": 7, "tag_name": "%s", "draft": true}' "$q"
+        [ "$CI_FAKE_MODE" = post_lost_two ] && printf ', {"id": 12, "tag_name": "%s", "draft": true}' "$q"
+        echo ']' ;;
     "POST $A/releases/7/assets?name="*)
         [ "$CI_FAKE_MODE" = upload_fail ] && exit 22
         cp "${fa#attachment=@}" "$F/asset"; echo '{"id": 9}' ;;
@@ -87,7 +104,7 @@ esac
 EOF
 chmod 755 "$D/bin/curl"
 
-for mode in upload_fail patch_lost ok; do
+for mode in upload_fail patch_lost ok post_lost post_lost_two post_lost_nolist; do
     R="$D/$mode"; mkdir -p "$R/work/.ci-out" "$R/fake"
     # what the build step leaves: the built commit (no upstream merge), no
     # upstream note, the module zip
@@ -113,6 +130,7 @@ with zipfile.ZipFile(sys.argv[1], "w", zipfile.ZIP_DEFLATED) as z:
             echo "ok: rc=$rc delete=$del token_in_argv=$tok draft=$(cat "$R/fake/draft" 2>/dev/null) main_moved=$([ "$head0" != "$head1" ] && echo yes || echo no)"
             echo "ok_update_json: $uj"
             echo "ok_module_prop: ${mp% }" ;;
+        post_lost*) echo "$mode: rc=$rc deleted=$(sed -n 's#^DELETE /api/v1/repos/o/r##p' "$R/fake/calls" | tr '\n' ' ')posts=$(grep -c '^POST /api/v1/repos/o/r/releases$' "$R/fake/calls") token_in_argv=$tok" ;;
         *) echo "$mode: rc=$rc delete=$del token_in_argv=$tok main_moved=$([ "$head0" != "$(git --git-dir="$BARE" rev-parse main)" ] && echo yes || echo no)" ;;
     esac
 done

@@ -8,9 +8,11 @@
 #                                   push merge -> publish -> commit update.json
 # The release step runs this script and the config as fetched from the dispatched
 # commit, never the copies in the build workspace. Any failure before publish
-# deletes the draft. The merge with upstream is pushed to main right before the
-# publish call, so a failure before that push pushes nothing, and a failed
-# publish leaves the merge on main (without a release).
+# deletes the draft (one whose create reply was lost: found by its exact tag in
+# the draft list, deleted only when it is the one match). The merge with
+# upstream is pushed to main right before the publish call, so a failure before
+# that push pushes nothing, and a failed publish leaves the merge on main
+# (without a release).
 #
 # Per-repo settings: .forgejo/module-ci.conf (sourced shell)
 #   UPSTREAM_URL, UPSTREAM_BRANCH   upstream merged into main ("" = none)
@@ -237,9 +239,19 @@ unzip -tq "$ZIP" >/dev/null || die "zip test failed"
 ZIP_SHA="$(sha "$ZIP")"
 log "zip $ZIP_NAME sha256 $ZIP_SHA"
 
-RELEASE_ID="" PUBLISHED=0
+RELEASE_ID="" PUBLISHED=0 POST_SENT=0
 cleanup() {
     rc=$?
+    if [ "$rc" -ne 0 ] && [ -z "$RELEASE_ID" ] && [ "$POST_SENT" = 1 ]; then
+        # the create POST was sent but its reply (the id) is lost: the forge may hold the draft.
+        # Forgejo lists drafts to a writer (draft=true; q matches a substring): delete it only
+        # when exactly one draft has exactly this tag; anything else is left (the job fails)
+        RELEASE_ID="$(api GET "/releases?draft=true&limit=50&q=$TAG" | python3 -I -c 'import json,sys
+m=[r for r in json.load(sys.stdin) if r.get("tag_name")==sys.argv[1] and r.get("draft") is True]
+print(m[0]["id"] if len(m)==1 else "")' "$TAG" || true)"
+        case "$RELEASE_ID" in *[!0-9]*) RELEASE_ID="" ;; esac
+        [ -n "$RELEASE_ID" ] || log "failure: the release POST got no reply and no single draft $TAG was found: check the releases by hand"
+    fi
     if [ "$rc" -ne 0 ] && [ -n "$RELEASE_ID" ] && [ "$PUBLISHED" != 1 ]; then
         # a publish PATCH whose reply was lost may still have been applied: delete only a confirmed draft
         draft="$(api GET "/releases/$RELEASE_ID" | jget draft || true)"
@@ -261,6 +273,7 @@ trap cleanup EXIT
 BODY="$(printf 'Built by module-release #%s from %s (%s).\nversionCode %s\nsha256 %s  %s\nupdateJson %s' \
     "$RUN_NUMBER" "${SRC_SHA:0:12}" "${DESC:-fork main}" "$VC" "$ZIP_SHA" "$ZIP_NAME" "$UPDATE_URL")"
 REQ="$(python3 -I -c 'import json,sys;print(json.dumps({"tag_name":sys.argv[1],"target_commitish":"main","name":sys.argv[2],"body":sys.argv[3],"draft":True}))' "$TAG" "$ZIP_PREFIX $VERSION" "$BODY")"
+POST_SENT=1
 RELEASE_ID="$(api POST /releases -H 'Content-Type: application/json' -d "$REQ" | jget id)"
 log "draft release $RELEASE_ID, uploading $ZIP_NAME"
 ASSET_ID="$(api POST "/releases/$RELEASE_ID/assets?name=$ZIP_NAME" -F "attachment=@$ZIP" | jget id)"

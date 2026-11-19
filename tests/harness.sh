@@ -2412,6 +2412,9 @@ if want ci_release; then
     check "upload fails while a draft: the draft deleted, main untouched" "upload_fail: rc=1 delete=1 token_in_argv=0 main_moved=no" "$(echo "$out" | grep '^upload_fail: ')"
     check "publish applied, its reply lost: the release not deleted" "patch_lost: rc=52 delete=0 token_in_argv=0 main_moved=no" "$(echo "$out" | grep '^patch_lost: ')"
     check "whole run: published, update.json and module.prop on main" "ok: rc=0 delete=0 token_in_argv=0 draft=False main_moved=yes|ok_update_json: 1.0-ci3 5 https://forge.example.invalid/o/r/releases/download/v1.0-ci3/demo-v1.0-ci3.zip|ok_module_prop: version=1.0-ci3 versionCode=5 updateJson=https://forge.example.invalid/o/r/raw/branch/main/update.json" "$(echo "$out" | grep '^ok' | tr '\n' '|' | sed 's/|$//')"
+    check "release POST applied, reply lost: the draft found by its exact tag and deleted, the POST not sent again" "post_lost: rc=1 deleted=/releases/7 posts=1 token_in_argv=0" "$(echo "$out" | grep '^post_lost: ')"
+    check "release POST reply lost, two drafts with that tag: none deleted" "post_lost_two: rc=1 deleted=posts=1 token_in_argv=0" "$(echo "$out" | grep '^post_lost_two: ')"
+    check "release POST reply lost, the list unreadable: none deleted" "post_lost_nolist: rc=1 deleted=posts=1 token_in_argv=0" "$(echo "$out" | grep '^post_lost_nolist: ')"
     check "build step: the zip holds the module's files and THIRD_PARTY_NOTICES.md" "build: rc=0 top=LICENSE META-INF THIRD_PARTY_NOTICES.md action.sh ctl.sh customize.sh module.prop post-fs-data.sh service.sh sh system uninstall.sh webroot wg-shield.png" "$(echo "$out" | grep '^build: ')"
     check "build step: the copy of the tree holds no test run" no "$([ -e "$RUN/ci/build/tests/.run" ] && echo yes || echo no)"
 fi
