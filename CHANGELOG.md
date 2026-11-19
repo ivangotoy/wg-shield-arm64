@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## Fork fixes after 2.9.1-ci2
 
 * **The module zip carries `THIRD_PARTY_NOTICES.md`** - the zip built by the release pipeline holds `system/bin/wg` and `system/bin/awg` (wireguard-tools, amneziawg-tools, GPL-2.0) but only the module's own `LICENSE` (MIT); the notices file that names their license and source is packed next to it now
 * **An Address or DNS entry with `?`, `*` or `[` in a tunnel file** was matched against the files of the folder the command ran in: `Address = 10.2.0.?/32` was imported as `10.2.0.7/32` when a folder `10.2.0.7` held a file `32`, and `DNS = 10.2.0.?` became the servers `10.2.0.7` and `10.2.0.9` when such files were there. Such entries are now checked as written (the Address refused, the DNS entry skipped)
