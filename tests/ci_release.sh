@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+# WG Shield Arm64 - offline check of the release pipeline (.forgejo/module-ci.sh).
+#
+#   bash tests/ci_release.sh SCRIPT DIR
+#
+# Runs SCRIPT (module-ci.sh) in release mode against a fake forge: curl is a
+# stub that answers the forge API, git is the real one on a local bare repo
+# (the forge URL is mapped to it with url.<path>.insteadOf), the token is
+# made up, nothing leaves the machine. DIR is a scratch folder (emptied).
+# Prints one line per scenario, "<scenario>: <results>"; tests/harness.sh
+# compares them.
+#   upload_fail   the asset upload fails while the release is a draft
+#   patch_lost    the publish PATCH is applied, its reply is lost
+#   ok            the whole run: draft, upload, check, publish, update.json
+set -u
+S=$(readlink -f "$1"); D=$2
+rm -rf "$D"; mkdir -p "$D/bin" "$D/home" "$D/tmp" "$D/seed"
+D=$(cd "$D" && pwd)
+FORGE=https://forge.example.invalid
+BARE="$D/forge.git"
+
+# the repo on the forge: a made-up module and its CI settings
+git init -q --bare -b main "$BARE"
+mkdir -p "$D/seed/.forgejo"
+cat > "$D/seed/.forgejo/module-ci.conf" <<'EOF'
+ZIP_PREFIX=demo
+VERSION_CODE_FLOOR=1
+UPDATE_JSON_PATH=update.json
+SYNC_ROOT_PROP=module.prop
+build() { :; }
+EOF
+printf '%s\n' id=demo name=Demo version=1.0-fork2 versionCode=5 updateJson=https://old.example.invalid/update.json > "$D/seed/module.prop"
+printf '{}\n' > "$D/seed/update.json"
+git -C "$D/seed" init -q -b main
+git -C "$D/seed" add -A
+git -C "$D/seed" -c user.name=Test -c user.email=test@example.invalid commit -q -m seed
+git -C "$D/seed" push -q "$BARE" main
+BASE=$(git -C "$D/seed" rev-parse HEAD)
+printf '[url "%s"]\n\tinsteadOf = %s/o/r.git\n' "$BARE" "$FORGE" > "$D/gitconfig"
+
+# curl: the forge. State in $CI_FAKE (draft, the uploaded asset), every call
+# as "METHOD URL-path" in $CI_FAKE/calls; a call whose arguments hold the
+# token is noted as TOKEN-IN-ARGV. CI_FAKE_MODE: upload_fail | patch_lost | ok
+cat > "$D/bin/curl" <<'EOF'
+#!/bin/sh
+F=$CI_FAKE; m=GET; o=""; w=""; fa=""; u=""
+for a in "$@"; do case "$a" in *tok-example*) echo TOKEN-IN-ARGV >> "$F/calls" ;; esac; done
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -X) m=$2; shift ;;
+        -o) o=$2; shift ;;
+        -w) w=$2; shift ;;
+        -F) fa=$2; shift ;;
+        -H|-d|--connect-timeout|--max-time|--retry) shift ;;
+        -*) : ;;
+        *) u=$1 ;;
+    esac
+    shift
+done
+p=${u#https://forge.example.invalid}
+echo "$m $p" >> "$F/calls"
+out() { if [ -n "$o" ] && [ "$o" != /dev/null ]; then cat > "$o"; else cat; fi; }
+A=/api/v1/repos/o/r
+case "$m $p" in
+    "GET $A/releases/tags/"*|"GET $A/tags/"*)
+        if [ -n "$w" ]; then printf 404; exit 0; fi
+        printf '{"commit": {"sha": "%s"}}\n' "$CI_FAKE_SHA" ;;
+    "POST $A/releases") echo True > "$F/draft"; echo '{"id": 7}' ;;
+    "POST $A/releases/7/assets?name="*)
+        [ "$CI_FAKE_MODE" = upload_fail ] && exit 22
+        cp "${fa#attachment=@}" "$F/asset"; echo '{"id": 9}' ;;
+    "GET $A/releases/7/assets/9") echo '{"browser_download_url": "https://forge.example.invalid/attachments/9"}' ;;
+    "GET /attachments/9"|"GET /o/r/releases/download/"*) [ -f "$F/asset" ] || exit 22; out < "$F/asset" ;;
+    "PATCH $A/releases/7")
+        echo False > "$F/draft"
+        [ "$CI_FAKE_MODE" = patch_lost ] && exit 52
+        echo '{}' ;;
+    "GET $A/releases/7")
+        if [ "$(cat "$F/draft")" = True ]; then echo '{"draft": true}'; else echo '{"draft": false}'; fi ;;
+    "DELETE $A/releases/7") rm -f "$F/draft" ;;
+    "GET /o/r/raw/branch/main/update.json") git --git-dir="$CI_FAKE_BARE" show main:update.json | out ;;
+    *) exit 22 ;;
+esac
+EOF
+chmod 755 "$D/bin/curl"
+
+for mode in upload_fail patch_lost ok; do
+    R="$D/$mode"; mkdir -p "$R/work/.ci-out" "$R/fake"
+    # what the build step leaves: the built commit (no upstream merge), no
+    # upstream note, the module zip
+    printf '%s\n\n' "$BASE" > "$R/work/.ci-out/src"
+    : > "$R/work/.ci-out/desc"
+    git --git-dir="$BARE" show main:module.prop > "$R/module.prop"
+    python3 -I -c 'import sys, zipfile
+with zipfile.ZipFile(sys.argv[1], "w", zipfile.ZIP_DEFLATED) as z:
+    z.write(sys.argv[2], "module.prop"); z.writestr("service.sh", "#!/system/bin/sh\n")' "$R/work/.ci-out/module.zip" "$R/module.prop"
+    head0=$(git --git-dir="$BARE" rev-parse main)
+    ( cd "$R" && env PATH="$D/bin:$PATH" HOME="$D/home" TMPDIR="$D/tmp" GIT_CONFIG_GLOBAL="$D/gitconfig" GIT_CONFIG_NOSYSTEM=1 \
+        CI_FAKE="$R/fake" CI_FAKE_MODE="$mode" CI_FAKE_SHA="$BASE" CI_FAKE_BARE="$BARE" \
+        RELEASE_TOKEN=tok-example SERVER_URL="$FORGE" REPOSITORY=o/r BASE_SHA="$BASE" RUN_NUMBER=3 \
+        bash "$S" release "$R/work" > "$R/log" 2>&1 )
+    rc=$?
+    del=$(grep -c '^DELETE ' "$R/fake/calls" 2>/dev/null)
+    tok=$(grep -c TOKEN-IN-ARGV "$R/fake/calls" 2>/dev/null)
+    case "$mode" in
+        ok)
+            head1=$(git --git-dir="$BARE" rev-parse main)
+            uj=$(git --git-dir="$BARE" show main:update.json | python3 -I -c 'import json, sys; d = json.load(sys.stdin); print(d["version"], d["versionCode"], d["zipUrl"])')
+            mp=$(git --git-dir="$BARE" show main:module.prop | grep -E '^(version|versionCode|updateJson)=' | tr '\n' ' ')
+            echo "ok: rc=$rc delete=$del token_in_argv=$tok draft=$(cat "$R/fake/draft" 2>/dev/null) main_moved=$([ "$head0" != "$head1" ] && echo yes || echo no)"
+            echo "ok_update_json: $uj"
+            echo "ok_module_prop: ${mp% }" ;;
+        *) echo "$mode: rc=$rc delete=$del token_in_argv=$tok main_moved=$([ "$head0" != "$(git --git-dir="$BARE" rev-parse main)" ] && echo yes || echo no)" ;;
+    esac
+done
