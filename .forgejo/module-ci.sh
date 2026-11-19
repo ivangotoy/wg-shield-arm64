@@ -241,8 +241,14 @@ RELEASE_ID="" PUBLISHED=0
 cleanup() {
     rc=$?
     if [ "$rc" -ne 0 ] && [ -n "$RELEASE_ID" ] && [ "$PUBLISHED" != 1 ]; then
-        log "failure before publish: deleting draft release $RELEASE_ID"
-        api DELETE "/releases/$RELEASE_ID" >/dev/null || true
+        # a publish PATCH whose reply was lost may still have been applied: delete only a confirmed draft
+        draft="$(api GET "/releases/$RELEASE_ID" | jget draft || true)"
+        if [ "$draft" = True ]; then
+            log "failure before publish: deleting draft release $RELEASE_ID"
+            api DELETE "/releases/$RELEASE_ID" >/dev/null || true
+        else
+            log "failure: release $RELEASE_ID not deleted (draft state '${draft:-unreadable}'): check it by hand"
+        fi
     fi
     rm -rf "$AUTH_DIR"
     exit "$rc"
