@@ -3,7 +3,8 @@
 ## Unreleased
 
 * **The module zip carries `THIRD_PARTY_NOTICES.md`** - the zip built by the release pipeline holds `system/bin/wg` and `system/bin/awg` (wireguard-tools, amneziawg-tools, GPL-2.0) but only the module's own `LICENSE` (MIT); the notices file that names their license and source is packed next to it now
-* **Test harness** - new case `ci_release`: the release pipeline (`.forgejo/module-ci.sh`) runs offline against a fake forge (stub `curl`, a local git repo, a made-up token) - a draft whose upload failed is deleted, a release whose publish reply was lost is kept, a whole run commits `update.json` and `module.prop`, the token never appears in `curl`'s arguments, and the build step packs the module's files
+* **An Address or DNS entry with `?`, `*` or `[` in a tunnel file** was matched against the files of the folder the command ran in: `Address = 10.2.0.?/32` was imported as `10.2.0.7/32` when a folder `10.2.0.7` held a file `32`, and `DNS = 10.2.0.?` became the servers `10.2.0.7` and `10.2.0.9` when such files were there. Such entries are now checked as written (the Address refused, the DNS entry skipped)
+* **Test harness** - new cases `parse_glob` (the two entries above) and `ci_release`: the release pipeline (`.forgejo/module-ci.sh`) runs offline against a fake forge (stub `curl`, a local git repo, a made-up token) - a draft whose upload failed is deleted, a release whose publish reply was lost is kept, a whole run commits `update.json` and `module.prop`, the token never appears in `curl`'s arguments, and the build step packs the module's files
 
 ## 2.9.1-fork3
 
