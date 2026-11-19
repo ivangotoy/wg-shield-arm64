@@ -16,6 +16,9 @@ jobs:
           SERVER_URL: ${{ github.server_url }}
           REPOSITORY: ${{ github.repository }}
           BASE_SHA: ${{ github.sha }}
+          # the clone runs before module-ci.sh sets these: a stalled transfer fails instead of hanging
+          GIT_HTTP_LOW_SPEED_LIMIT: 1024
+          GIT_HTTP_LOW_SPEED_TIME: 60
         run: |
           set -eu
           git clone -q --branch main "$SERVER_URL/$REPOSITORY.git" src
