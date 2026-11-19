@@ -28,6 +28,10 @@
 #                                   RELEASE_FILES; sees VERSION VC TAG ZIP_NAME ZIP_URL ZIP_SHA ZIP_SIZE
 #                                   BUILT_VERSION SRC_SHA BODY CHANGELOG_URL UPDATE_URL
 set -euo pipefail
+# git has no timeout of its own: a fetch/clone/push whose server stops sending fails after
+# 60 s below 1 KiB/s instead of holding the runner until the job timeout (values set by the
+# caller are kept)
+export GIT_HTTP_LOW_SPEED_LIMIT="${GIT_HTTP_LOW_SPEED_LIMIT:-1024}" GIT_HTTP_LOW_SPEED_TIME="${GIT_HTTP_LOW_SPEED_TIME:-60}"
 
 MODE="${1:?mode}"; WORK="$(cd "${2:?workdir}" && pwd)"
 : "${SERVER_URL:?}" "${REPOSITORY:?}" "${BASE_SHA:?}"
