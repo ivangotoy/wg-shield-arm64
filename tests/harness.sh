@@ -2458,6 +2458,11 @@ if want ci_release; then
     check "build step: the copy of the tree holds no test run" no "$([ -e "$RUN/ci/build/tests/.run" ] && echo yes || echo no)"
 fi
 
+if want no_remote_assets; then
+    echo "no_remote_assets: the WebUI pages load nothing from another host"
+    check "no stylesheet, script or font from a remote host in webroot/*.html" "" "$(grep -n -i -E '<(link|script)[^>]*(href|src)="(https?:)?//' "$REPO"/webroot/*.html | sed "s#^$REPO/##" | cut -d: -f1,2 | tr '\n' ' ')"
+fi
+
 echo
 echo "passed $PASS, failed $FAILN"
 [ "$FAILN" = 0 ]
