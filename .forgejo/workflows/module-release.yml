@@ -11,7 +11,9 @@ jobs:
     runs-on: kernelsu-ci
     timeout-minutes: 170
     steps:
-      - name: Build (no forge token, unprivileged build user)
+      # the dispatched commit, also when main has moved since: the root half of the build and
+      # the release step then use the same module-ci.sh and conf
+      - name: Checkout (the dispatched commit)
         env:
           SERVER_URL: ${{ github.server_url }}
           REPOSITORY: ${{ github.repository }}
@@ -22,6 +24,14 @@ jobs:
         run: |
           set -eu
           git clone -q --branch main "$SERVER_URL/$REPOSITORY.git" src
+          git -C src checkout -q --detach "$BASE_SHA"
+      - name: Build (no forge token, unprivileged build user)
+        env:
+          SERVER_URL: ${{ github.server_url }}
+          REPOSITORY: ${{ github.repository }}
+          BASE_SHA: ${{ github.sha }}
+        run: |
+          set -eu
           bash src/.forgejo/module-ci.sh build src
       - name: Release (script and config from the dispatched commit)
         env:
