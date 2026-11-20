@@ -2534,6 +2534,7 @@ if want ci_release; then
     check "build step: upstream-desc and desc linked by the build user: neither read nor written through the link" "links_desc: rc=0 secret=secret-example victim=victim-example desc=file desc_secret=0 other=" "$(echo "$out" | grep '^links_desc: ')"
     check "build step: .ci-out replaced by a link by the build user: refused, nothing written through it" "links_out: rc=1 secret=secret-example victim=victim-example desc=none desc_secret=0 other=module.zip" "$(echo "$out" | grep '^links_out: ')"
     check "build step: the merged upstream tracks .ci-out as a link: refused, nothing written through it" "links_merge: rc=1 secret=secret-example victim=victim-example desc=none desc_secret=0 other=" "$(echo "$out" | grep '^links_merge: ')"
+    check "build step: the merged upstream tracks .ci-out/src and .ci-out/merge.bundle as links: not written through" "links_merge_in: rc=0 secret=secret-example victim=victim-example desc=file desc_secret=0 other=" "$(echo "$out" | grep '^links_merge_in: ')"
     check "build step: the zip holds the module's files and THIRD_PARTY_NOTICES.md" "build: rc=0 top=LICENSE META-INF THIRD_PARTY_NOTICES.md action.sh ctl.sh customize.sh module.prop post-fs-data.sh service.sh sh system uninstall.sh webroot wg-shield.png" "$(echo "$out" | grep '^build: ')"
     check "build step: the copy of the tree holds no test run" no "$([ -e "$RUN/ci/build/tests/.run" ] && echo yes || echo no)"
 fi

@@ -31,6 +31,8 @@
 #                 place of .ci-out: refused, nothing written there
 #   links_merge   the same, the merged upstream tracks .ci-out as a link to
 #                 another folder: refused, nothing written there
+#   links_merge_in    the same, the merged upstream tracks .ci-out/src and
+#                 .ci-out/merge.bundle as links to files: not written through
 #   build         (with TREE, a module source tree) the build step's own
 #                 part (build-user) with TREE's module-ci.conf: what the
 #                 module zip holds at its top level
@@ -170,11 +172,11 @@ exit 0
 EOF
 printf '#!/bin/sh\nexit 0\n' > "$D/bin/chown"
 chmod 755 "$D/bin/setpriv" "$D/bin/chown"
-for mode in links_desc links_out links_merge; do
+for mode in links_desc links_out links_merge links_merge_in; do
     B="$D/$mode"; mkdir -p "$B/repo/.forgejo" "$B/other"
     printf 'secret-example\n' > "$B/secret"; printf 'victim-example\n' > "$B/victim"
     cp "$S" "$B/repo/.forgejo/module-ci.sh"
-    [ "$mode" = links_merge ] && printf 'UPSTREAM_URL=%s\nUPSTREAM_BRANCH=main\n' "$B/up" > "$B/repo/.forgejo/module-ci.conf"
+    case "$mode" in links_merge*) printf 'UPSTREAM_URL=%s\nUPSTREAM_BRANCH=main\n' "$B/up" > "$B/repo/.forgejo/module-ci.conf" ;; esac
     cat >> "$B/repo/.forgejo/module-ci.conf" <<'EOF'
 build() {
     case "$WORK" in
@@ -193,6 +195,13 @@ EOF
         ln -s ../other "$B/up/.ci-out"
         git -C "$B/up" add .ci-out
         git -C "$B/up" -c user.name=Test -c user.email=test@example.invalid commit -q -m 'upstream: .ci-out as a link'
+    elif [ "$mode" = links_merge_in ]; then
+        git clone -q "$B/repo" "$B/up"
+        mkdir "$B/up/.ci-out"
+        ln -s ../../victim "$B/up/.ci-out/src"
+        ln -s ../../secret "$B/up/.ci-out/merge.bundle"
+        git -C "$B/up" add .ci-out
+        git -C "$B/up" -c user.name=Test -c user.email=test@example.invalid commit -q -m 'upstream: links in .ci-out'
     fi
     ( cd "$B" && env PATH="$D/bin:$PATH" HOME="$D/home" TMPDIR="$D/tmp" GIT_CONFIG_GLOBAL="$D/gitconfig" GIT_CONFIG_NOSYSTEM=1 \
         SERVER_URL="$FORGE" REPOSITORY=o/r BASE_SHA="$(git -C "$B/repo" rev-parse HEAD)" \
@@ -200,7 +209,7 @@ EOF
     rc=$?
     d="$B/repo/.ci-out/desc"
     if [ -L "$d" ]; then k="link"; elif [ -f "$d" ]; then k="file"; else k="none"; fi
-    echo "$mode: rc=$rc secret=$(cat "$B/secret") victim=$(cat "$B/victim") desc=$k desc_secret=$(cat "$d" 2>/dev/null | grep -c secret-example) other=$(find "$B/other" -mindepth 1 -printf '%f\n' | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')"
+    echo "$mode: rc=$rc secret=$(head -n1 "$B/secret" | tr -cd '[:print:]') victim=$(head -n1 "$B/victim" | tr -cd '[:print:]') desc=$k desc_secret=$(cat "$d" 2>/dev/null | grep -c secret-example) other=$(find "$B/other" -mindepth 1 -printf '%f\n' | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')"
 done
 
 if [ -n "$TREE" ]; then

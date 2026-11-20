@@ -93,6 +93,8 @@ if [ "$MODE" = build ]; then
         DESC="$UP_NAME@$UPSTREAM_BRANCH ${UP_SHA:0:12}"
     fi
     out_dir
+    # a merged tree may track links in .ci-out: root writes fresh files, never through one
+    rm -f "$OUT/merge.bundle" "$OUT/src"
     [ "$SRC_SHA" = "$BASE_SHA" ] || git bundle create -q "$OUT/merge.bundle" "$BASE_SHA..main"
     printf '%s\n%s\n' "$SRC_SHA" "$UP_SHA" > "$OUT/src"
     mkdir -p "$WORK/.ci-home"
