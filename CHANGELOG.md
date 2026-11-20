@@ -4,6 +4,7 @@
 
 * **DNS Test and Leak Test say when the browser does not open** - the buttons hand the site to the phone's browser (`am start`); when that failed (no root bridge, the command refused, *Activity not started*) nothing happened and nothing was shown. A message says so now
 * **A WebUI action whose command does not run says so** - when the root manager's bridge threw or gave no answer in time, an action (switch, import, backup, a setting...) ended without any message; a toast says the module gave no answer now. The 4-second status poll keeps its banner
+* **Settings kept when the first boot after an update from 1.0-r3 or older cannot move them** - the move of `/data/adb/wg-shield.conf` into `/data/adb/wg-shield/` deleted the settings already in the new place first and, when the rename then failed, the old file too: every setting was back at its default. A failed rename now keeps both, and the next boot tries again
 
 ## Fork fixes after 2.9.1-ci2
 
