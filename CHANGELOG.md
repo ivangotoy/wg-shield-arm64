@@ -8,6 +8,7 @@
 * **Dashboard *Check* no longer stays at *Asking...*** when the module gives no answer; it shows the error like a failed IP service
 * **Settings kept when the first boot after an update from 1.0-r3 or older cannot move them** - the move of `/data/adb/wg-shield.conf` into `/data/adb/wg-shield/` deleted the settings already in the new place first and, when the rename then failed, the old file too: every setting was back at its default. A failed rename now keeps both, and the next boot tries again
 * README: *How it works* and the networking set no longer say WG Shield uses no iptables rules at all - the DNS redirect has its own chains (`wgs_dns`, `wgs_dnss`, `wgs_dnsb`)
+* **Test harness** - new cases `zip_links` (symlink entries in an export zip or the backup) and `migrate_fail`; `ci_release` also fails a run after the publish and loses a create POST that was never applied; `no_remote_assets` scans every WebUI file for any load from another host; the WebUI checks (`webui`, `tests/webui_rows.js`) read every page and drive the page's failure messages with a fake root bridge
 
 ## Fork fixes after 2.9.1-ci2
 
