@@ -1,5 +1,9 @@
 # Changelog
 
+## Fork fixes after 2.9.1-ci5
+
+* **DNS Test and Leak Test say when the browser does not open** - the buttons hand the site to the phone's browser (`am start`); when that failed (no root bridge, the command refused, *Activity not started*) nothing happened and nothing was shown. A message says so now
+
 ## Fork fixes after 2.9.1-ci2
 
 * **The module zip carries `THIRD_PARTY_NOTICES.md`** - the zip built by the release pipeline holds `system/bin/wg` and `system/bin/awg` (wireguard-tools, amneziawg-tools, GPL-2.0) but only the module's own `LICENSE` (MIT); the notices file that names their license and source is packed next to it now
