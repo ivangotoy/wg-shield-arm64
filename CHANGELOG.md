@@ -3,6 +3,7 @@
 ## Fork fixes after 2.9.1-ci5
 
 * **DNS Test and Leak Test say when the browser does not open** - the buttons hand the site to the phone's browser (`am start`); when that failed (no root bridge, the command refused, *Activity not started*) nothing happened and nothing was shown. A message says so now
+* **A WebUI action whose command does not run says so** - when the root manager's bridge threw or gave no answer in time, an action (switch, import, backup, a setting...) ended without any message; a toast says the module gave no answer now. The 4-second status poll keeps its banner
 
 ## Fork fixes after 2.9.1-ci2
 
