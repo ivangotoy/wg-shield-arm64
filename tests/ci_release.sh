@@ -16,6 +16,11 @@
 #                 is found in the release list (exact tag, draft) and deleted
 #   post_lost_two the same, but the list holds two such drafts: none deleted
 #   post_lost_nolist  the same, but the list cannot be read: none deleted
+#   post_lost_none    the POST was never applied, its reply lost: the list
+#                 holds no draft with that tag, none deleted
+#   after_publish the run fails after the publish (the tag points at another
+#                 commit); the forge still calls it a draft: never deleted,
+#                 not even looked at
 #   build         (with TREE, a module source tree) the build step's own
 #                 part (build-user) with TREE's module-ci.conf: what the
 #                 module zip holds at its top level
@@ -71,8 +76,10 @@ A=/api/v1/repos/o/r
 case "$m $p" in
     "GET $A/releases/tags/"*|"GET $A/tags/"*)
         if [ -n "$w" ]; then printf 404; exit 0; fi
-        printf '{"commit": {"sha": "%s"}}\n' "$CI_FAKE_SHA" ;;
+        if [ "$CI_FAKE_MODE" = after_publish ]; then printf '{"commit": {"sha": "%040d"}}\n' 0
+        else printf '{"commit": {"sha": "%s"}}\n' "$CI_FAKE_SHA"; fi ;;
     "POST $A/releases")
+        [ "$CI_FAKE_MODE" = post_lost_none ] && exit 52
         echo True > "$F/draft"
         case "$CI_FAKE_MODE" in post_lost*) exit 52 ;; esac
         echo '{"id": 7}' ;;
@@ -92,19 +99,23 @@ case "$m $p" in
     "GET $A/releases/7/assets/9") echo '{"browser_download_url": "https://forge.example.invalid/attachments/9"}' ;;
     "GET /attachments/9"|"GET /o/r/releases/download/"*) [ -f "$F/asset" ] || exit 22; out < "$F/asset" ;;
     "PATCH $A/releases/7")
-        echo False > "$F/draft"
+        [ "$CI_FAKE_MODE" = after_publish ] || echo False > "$F/draft"
         [ "$CI_FAKE_MODE" = patch_lost ] && exit 52
         echo '{}' ;;
     "GET $A/releases/7")
         if [ "$(cat "$F/draft")" = True ]; then echo '{"draft": true}'; else echo '{"draft": false}'; fi ;;
     "DELETE $A/releases/7") rm -f "$F/draft" ;;
+    # the list's other entries exist too: deleting one of them shows
+    "GET $A/releases/8"|"GET $A/releases/12") echo '{"draft": true}' ;;
+    "GET $A/releases/11") echo '{"draft": false}' ;;
+    "DELETE $A/releases/8"|"DELETE $A/releases/11"|"DELETE $A/releases/12") : ;;
     "GET /o/r/raw/branch/main/update.json") git --git-dir="$CI_FAKE_BARE" show main:update.json | out ;;
     *) exit 22 ;;
 esac
 EOF
 chmod 755 "$D/bin/curl"
 
-for mode in upload_fail patch_lost ok post_lost post_lost_two post_lost_nolist; do
+for mode in upload_fail patch_lost ok post_lost post_lost_two post_lost_nolist post_lost_none after_publish; do
     R="$D/$mode"; mkdir -p "$R/work/.ci-out" "$R/fake"
     # what the build step leaves: the built commit (no upstream merge), no
     # upstream note, the module zip
@@ -130,6 +141,7 @@ with zipfile.ZipFile(sys.argv[1], "w", zipfile.ZIP_DEFLATED) as z:
             echo "ok: rc=$rc delete=$del token_in_argv=$tok draft=$(cat "$R/fake/draft" 2>/dev/null) main_moved=$([ "$head0" != "$head1" ] && echo yes || echo no)"
             echo "ok_update_json: $uj"
             echo "ok_module_prop: ${mp% }" ;;
+        after_publish) echo "$mode: rc=$rc delete=$del draft_gets=$(grep -c '^GET /api/v1/repos/o/r/releases/7$' "$R/fake/calls") token_in_argv=$tok" ;;
         post_lost*) echo "$mode: rc=$rc deleted=$(sed -n 's#^DELETE /api/v1/repos/o/r##p' "$R/fake/calls" | tr '\n' ' ')posts=$(grep -c '^POST /api/v1/repos/o/r/releases$' "$R/fake/calls") token_in_argv=$tok" ;;
         *) echo "$mode: rc=$rc delete=$del token_in_argv=$tok main_moved=$([ "$head0" != "$(git --git-dir="$BARE" rev-parse main)" ] && echo yes || echo no)" ;;
     esac
