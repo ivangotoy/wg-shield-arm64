@@ -121,8 +121,10 @@ if [ "$MODE" = build ]; then
             SERVER_URL="$SERVER_URL" REPOSITORY="$REPOSITORY" BASE_SHA="$BASE_SHA" OUT="$OUT"
         exec env ${drop[@]+"${drop[@]}"} setpriv --reuid="$BUILD_UID" --regid="$BUILD_UID" --clear-groups \
             bash "$WORK/.forgejo/module-ci.sh" build-user "$WORK"
-    ) || die "build failed"
+    ) || build_rc=$?
+    # nothing the build user started outlives the build, whether it failed or not
     setpriv --reuid="$BUILD_UID" --regid="$BUILD_UID" --clear-groups kill -9 -1 2>/dev/null || true
+    [ "${build_rc:-0}" = 0 ] || die "build failed"
     out_dir
     [ -f "$OUT/module.zip" ] || die "build left no $OUT/module.zip"
     put_desc

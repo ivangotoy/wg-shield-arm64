@@ -33,6 +33,8 @@
 #                 another folder: refused, nothing written there
 #   links_merge_in    the same, the merged upstream tracks .ci-out/src and
 #                 .ci-out/merge.bundle as links to files: not written through
+#   build_fail    the same, build() fails: the job fails, and the build user's
+#                 processes are still killed (the stub records the kill)
 #   build         (with TREE, a module source tree) the build step's own
 #                 part (build-user) with TREE's module-ci.conf: what the
 #                 module zip holds at its top level
@@ -162,17 +164,19 @@ with zipfile.ZipFile(sys.argv[1], "w", zipfile.ZIP_DEFLATED) as z:
 done
 
 # the build step as root, after a build user that planted links: setpriv
-# runs only the build user's bash (as this user, never `kill -9 -1`), chown
-# does nothing. Each scenario has its own repo, with SCRIPT as its module-ci.sh
+# runs only the build user's bash (as this user, never `kill -9 -1`: any other
+# call is recorded in SETPRIV_LOG), chown does nothing. Each scenario has its own repo, with SCRIPT as its module-ci.sh
 cat > "$D/bin/setpriv" <<'EOF'
 #!/bin/sh
+all="$*"
 while [ $# -gt 0 ]; do case "$1" in --*) shift ;; *) break ;; esac; done
 [ "$1" = bash ] && exec "$@"
+echo "$all" >> "$SETPRIV_LOG"
 exit 0
 EOF
 printf '#!/bin/sh\nexit 0\n' > "$D/bin/chown"
 chmod 755 "$D/bin/setpriv" "$D/bin/chown"
-for mode in links_desc links_out links_merge links_merge_in; do
+for mode in links_desc links_out links_merge links_merge_in build_fail; do
     B="$D/$mode"; mkdir -p "$B/repo/.forgejo" "$B/other"
     printf 'secret-example\n' > "$B/secret"; printf 'victim-example\n' > "$B/victim"
     cp "$S" "$B/repo/.forgejo/module-ci.sh"
@@ -182,6 +186,7 @@ build() {
     case "$WORK" in
         */links_desc/repo) printf x > "$OUT/module.zip"; ln -s ../../secret "$OUT/upstream-desc"; ln -s ../../victim "$OUT/desc" ;;
         */links_out/repo) rm -rf "$OUT"; ln -s ../other "$OUT"; printf x > "$OUT/module.zip" ;;
+        */build_fail/repo) echo "example build failure" >&2; return 1 ;;
         *) printf x > "$OUT/module.zip" ;;
     esac
 }
@@ -203,12 +208,14 @@ EOF
         git -C "$B/up" add .ci-out
         git -C "$B/up" -c user.name=Test -c user.email=test@example.invalid commit -q -m 'upstream: links in .ci-out'
     fi
-    ( cd "$B" && env PATH="$D/bin:$PATH" HOME="$D/home" TMPDIR="$D/tmp" GIT_CONFIG_GLOBAL="$D/gitconfig" GIT_CONFIG_NOSYSTEM=1 \
+    : > "$B/setpriv.log"
+    ( cd "$B" && env PATH="$D/bin:$PATH" SETPRIV_LOG="$B/setpriv.log" HOME="$D/home" TMPDIR="$D/tmp" GIT_CONFIG_GLOBAL="$D/gitconfig" GIT_CONFIG_NOSYSTEM=1 \
         SERVER_URL="$FORGE" REPOSITORY=o/r BASE_SHA="$(git -C "$B/repo" rev-parse HEAD)" \
         bash "$S" build "$B/repo" > "$B/log" 2>&1 )
     rc=$?
     d="$B/repo/.ci-out/desc"
     if [ -L "$d" ]; then k="link"; elif [ -f "$d" ]; then k="file"; else k="none"; fi
+    echo "$mode kills: $(grep -c -e '--reuid=1000 .*kill -9 -1' "$B/setpriv.log")"
     echo "$mode: rc=$rc secret=$(head -n1 "$B/secret" | tr -cd '[:print:]') victim=$(head -n1 "$B/victim" | tr -cd '[:print:]') desc=$k desc_secret=$(cat "$d" 2>/dev/null | grep -c secret-example) other=$(find "$B/other" -mindepth 1 -printf '%f\n' | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')"
 done
 
