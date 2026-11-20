@@ -2530,6 +2530,10 @@ if want ci_release; then
     check "release POST reply lost, the list unreadable: none deleted" "post_lost_nolist: rc=1 deleted=posts=1 token_in_argv=0" "$(echo "$out" | grep '^post_lost_nolist: ')"
     check "release POST never applied, reply lost: no draft with that tag, none deleted" "post_lost_none: rc=1 deleted=posts=1 token_in_argv=0" "$(echo "$out" | grep '^post_lost_none: ')"
     check "failure after the publish: the release never deleted, its draft state not even asked" "after_publish: rc=1 delete=0 draft_gets=0 token_in_argv=0" "$(echo "$out" | grep '^after_publish: ')"
+    check "release: a .ci-out that is a link to another folder refused before any forge call" "out_link: rc=1 calls=0" "$(echo "$out" | grep '^out_link: ')"
+    check "build step: upstream-desc and desc linked by the build user: neither read nor written through the link" "links_desc: rc=0 secret=secret-example victim=victim-example desc=file desc_secret=0 other=" "$(echo "$out" | grep '^links_desc: ')"
+    check "build step: .ci-out replaced by a link by the build user: refused, nothing written through it" "links_out: rc=1 secret=secret-example victim=victim-example desc=none desc_secret=0 other=module.zip" "$(echo "$out" | grep '^links_out: ')"
+    check "build step: the merged upstream tracks .ci-out as a link: refused, nothing written through it" "links_merge: rc=1 secret=secret-example victim=victim-example desc=none desc_secret=0 other=" "$(echo "$out" | grep '^links_merge: ')"
     check "build step: the zip holds the module's files and THIRD_PARTY_NOTICES.md" "build: rc=0 top=LICENSE META-INF THIRD_PARTY_NOTICES.md action.sh ctl.sh customize.sh module.prop post-fs-data.sh service.sh sh system uninstall.sh webroot wg-shield.png" "$(echo "$out" | grep '^build: ')"
     check "build step: the copy of the tree holds no test run" no "$([ -e "$RUN/ci/build/tests/.run" ] && echo yes || echo no)"
 fi

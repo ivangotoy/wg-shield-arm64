@@ -21,6 +21,16 @@
 #   after_publish the run fails after the publish (the tag points at another
 #                 commit); the forge still calls it a draft: never deleted,
 #                 not even looked at
+#   out_link      the build left .ci-out as a link to another folder that
+#                 holds valid build results: refused before any forge call
+#   links_desc    the build step (mode build: setpriv and chown are stubs,
+#                 the build user's bash runs as this user) after a build()
+#                 that links upstream-desc to one file and desc to another:
+#                 neither is read or written through the link
+#   links_out     the same, the build() puts a link to another folder in
+#                 place of .ci-out: refused, nothing written there
+#   links_merge   the same, the merged upstream tracks .ci-out as a link to
+#                 another folder: refused, nothing written there
 #   build         (with TREE, a module source tree) the build step's own
 #                 part (build-user) with TREE's module-ci.conf: what the
 #                 module zip holds at its top level
@@ -115,16 +125,17 @@ esac
 EOF
 chmod 755 "$D/bin/curl"
 
-for mode in upload_fail patch_lost ok post_lost post_lost_two post_lost_nolist post_lost_none after_publish; do
-    R="$D/$mode"; mkdir -p "$R/work/.ci-out" "$R/fake"
+for mode in upload_fail patch_lost ok post_lost post_lost_two post_lost_nolist post_lost_none after_publish out_link; do
+    R="$D/$mode"; O="$R/work/.ci-out"; mkdir -p "$R/work" "$R/fake"
+    if [ "$mode" = out_link ]; then mkdir -p "$R/elsewhere"; ln -s ../elsewhere "$O"; else mkdir -p "$O"; fi
     # what the build step leaves: the built commit (no upstream merge), no
     # upstream note, the module zip
-    printf '%s\n\n' "$BASE" > "$R/work/.ci-out/src"
-    : > "$R/work/.ci-out/desc"
+    printf '%s\n\n' "$BASE" > "$O/src"
+    : > "$O/desc"
     git --git-dir="$BARE" show main:module.prop > "$R/module.prop"
     python3 -I -c 'import sys, zipfile
 with zipfile.ZipFile(sys.argv[1], "w", zipfile.ZIP_DEFLATED) as z:
-    z.write(sys.argv[2], "module.prop"); z.writestr("service.sh", "#!/system/bin/sh\n")' "$R/work/.ci-out/module.zip" "$R/module.prop"
+    z.write(sys.argv[2], "module.prop"); z.writestr("service.sh", "#!/system/bin/sh\n")' "$O/module.zip" "$R/module.prop"
     head0=$(git --git-dir="$BARE" rev-parse main)
     ( cd "$R" && env PATH="$D/bin:$PATH" HOME="$D/home" TMPDIR="$D/tmp" GIT_CONFIG_GLOBAL="$D/gitconfig" GIT_CONFIG_NOSYSTEM=1 \
         CI_FAKE="$R/fake" CI_FAKE_MODE="$mode" CI_FAKE_SHA="$BASE" CI_FAKE_BARE="$BARE" \
@@ -142,9 +153,54 @@ with zipfile.ZipFile(sys.argv[1], "w", zipfile.ZIP_DEFLATED) as z:
             echo "ok_update_json: $uj"
             echo "ok_module_prop: ${mp% }" ;;
         after_publish) echo "$mode: rc=$rc delete=$del draft_gets=$(grep -c '^GET /api/v1/repos/o/r/releases/7$' "$R/fake/calls") token_in_argv=$tok" ;;
+        out_link) echo "$mode: rc=$rc calls=$(cat "$R/fake/calls" 2>/dev/null | grep -c .)" ;;
         post_lost*) echo "$mode: rc=$rc deleted=$(sed -n 's#^DELETE /api/v1/repos/o/r##p' "$R/fake/calls" | tr '\n' ' ')posts=$(grep -c '^POST /api/v1/repos/o/r/releases$' "$R/fake/calls") token_in_argv=$tok" ;;
         *) echo "$mode: rc=$rc delete=$del token_in_argv=$tok main_moved=$([ "$head0" != "$(git --git-dir="$BARE" rev-parse main)" ] && echo yes || echo no)" ;;
     esac
+done
+
+# the build step as root, after a build user that planted links: setpriv
+# runs only the build user's bash (as this user, never `kill -9 -1`), chown
+# does nothing. Each scenario has its own repo, with SCRIPT as its module-ci.sh
+cat > "$D/bin/setpriv" <<'EOF'
+#!/bin/sh
+while [ $# -gt 0 ]; do case "$1" in --*) shift ;; *) break ;; esac; done
+[ "$1" = bash ] && exec "$@"
+exit 0
+EOF
+printf '#!/bin/sh\nexit 0\n' > "$D/bin/chown"
+chmod 755 "$D/bin/setpriv" "$D/bin/chown"
+for mode in links_desc links_out links_merge; do
+    B="$D/$mode"; mkdir -p "$B/repo/.forgejo" "$B/other"
+    printf 'secret-example\n' > "$B/secret"; printf 'victim-example\n' > "$B/victim"
+    cp "$S" "$B/repo/.forgejo/module-ci.sh"
+    [ "$mode" = links_merge ] && printf 'UPSTREAM_URL=%s\nUPSTREAM_BRANCH=main\n' "$B/up" > "$B/repo/.forgejo/module-ci.conf"
+    cat >> "$B/repo/.forgejo/module-ci.conf" <<'EOF'
+build() {
+    case "$WORK" in
+        */links_desc/repo) printf x > "$OUT/module.zip"; ln -s ../../secret "$OUT/upstream-desc"; ln -s ../../victim "$OUT/desc" ;;
+        */links_out/repo) rm -rf "$OUT"; ln -s ../other "$OUT"; printf x > "$OUT/module.zip" ;;
+        *) printf x > "$OUT/module.zip" ;;
+    esac
+}
+EOF
+    printf 'id=demo\n' > "$B/repo/module.prop"
+    git -C "$B/repo" init -q -b main
+    git -C "$B/repo" add -A
+    git -C "$B/repo" -c user.name=Test -c user.email=test@example.invalid commit -q -m seed
+    if [ "$mode" = links_merge ]; then
+        git clone -q "$B/repo" "$B/up"
+        ln -s ../other "$B/up/.ci-out"
+        git -C "$B/up" add .ci-out
+        git -C "$B/up" -c user.name=Test -c user.email=test@example.invalid commit -q -m 'upstream: .ci-out as a link'
+    fi
+    ( cd "$B" && env PATH="$D/bin:$PATH" HOME="$D/home" TMPDIR="$D/tmp" GIT_CONFIG_GLOBAL="$D/gitconfig" GIT_CONFIG_NOSYSTEM=1 \
+        SERVER_URL="$FORGE" REPOSITORY=o/r BASE_SHA="$(git -C "$B/repo" rev-parse HEAD)" \
+        bash "$S" build "$B/repo" > "$B/log" 2>&1 )
+    rc=$?
+    d="$B/repo/.ci-out/desc"
+    if [ -L "$d" ]; then k="link"; elif [ -f "$d" ]; then k="file"; else k="none"; fi
+    echo "$mode: rc=$rc secret=$(cat "$B/secret") victim=$(cat "$B/victim") desc=$k desc_secret=$(cat "$d" 2>/dev/null | grep -c secret-example) other=$(find "$B/other" -mindepth 1 -printf '%f\n' | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')"
 done
 
 if [ -n "$TREE" ]; then

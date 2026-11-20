@@ -51,6 +51,14 @@ jget() { python3 -I -c 'import json,sys;d=json.load(sys.stdin)
 for k in sys.argv[1].split("."): d=d[int(k)] if k.isdigit() else d[k]
 print(d)' "$1"; }
 pack_paths() { (cd "$WORK" && zip -qr9 -X "$OUT/module.zip" "$@" -x '*/.gitkeep'); }
+# $OUT as a folder of its own, not a link the build user or a merged tree put in its place
+out_dir() { if [ -L "$OUT" ] || [ ! -d "$OUT" ]; then die "$OUT is not a directory"; fi; }
+# build step, as root after the build user ran: desc never through a link it planted
+put_desc() {
+    if [ -f "$OUT/upstream-desc" ] && [ ! -L "$OUT/upstream-desc" ]; then DESC="$(head -n1 "$OUT/upstream-desc")"; fi
+    rm -f "$OUT/desc"
+    printf '%s\n' "$DESC" > "$OUT/desc"
+}
 load_conf() {
     UPSTREAM_URL="" UPSTREAM_BRANCH="" ZIP_PREFIX="${REPOSITORY#*/}" VERSION_CODE_FLOOR=0 VERSION_CODE_OFFSET=0
     UPDATE_JSON_PATH=".forgejo/update.json" SYNC_ROOT_PROP="" CHANGELOG_PATH=""
@@ -83,8 +91,9 @@ if [ "$MODE" = build ]; then
         fi
         SRC_SHA="$(git rev-parse HEAD)"
         DESC="$UP_NAME@$UPSTREAM_BRANCH ${UP_SHA:0:12}"
-        [ "$SRC_SHA" = "$BASE_SHA" ] || git bundle create -q "$OUT/merge.bundle" "$BASE_SHA..main"
     fi
+    out_dir
+    [ "$SRC_SHA" = "$BASE_SHA" ] || git bundle create -q "$OUT/merge.bundle" "$BASE_SHA..main"
     printf '%s\n%s\n' "$SRC_SHA" "$UP_SHA" > "$OUT/src"
     mkdir -p "$WORK/.ci-home"
     chown -R "$BUILD_UID:$BUILD_UID" "$WORK" "$OUT"
@@ -112,9 +121,9 @@ if [ "$MODE" = build ]; then
             bash "$WORK/.forgejo/module-ci.sh" build-user "$WORK"
     ) || die "build failed"
     setpriv --reuid="$BUILD_UID" --regid="$BUILD_UID" --clear-groups kill -9 -1 2>/dev/null || true
+    out_dir
     [ -f "$OUT/module.zip" ] || die "build left no $OUT/module.zip"
-    [ -f "$OUT/upstream-desc" ] && DESC="$(head -n1 "$OUT/upstream-desc")"
-    printf '%s\n' "$DESC" > "$OUT/desc"
+    put_desc
     log "build done"
     exit 0
 fi
@@ -152,7 +161,7 @@ load_conf "$REL/module-ci.conf"
 
 # build results are data owned by the build user: regular files only, checked before use
 regular() { [ -f "$1" ] && [ ! -L "$1" ] || die "$1 is not a regular file"; }
-regular "$OUT/src"; regular "$OUT/desc"; regular "$OUT/module.zip"
+out_dir; regular "$OUT/src"; regular "$OUT/desc"; regular "$OUT/module.zip"
 { read -r SRC_SHA; read -r UP_SHA; } < "$OUT/src"
 DESC="$(head -c 200 "$OUT/desc" | head -n1 | tr -cd '[:print:]')"
 [[ "$SRC_SHA" =~ ^[0-9a-f]{40}$ ]] || die "bad source sha"
