@@ -21,6 +21,8 @@
 #   VERSION_CODE_OFFSET             added to the built versionCode (default 0)
 #   UPDATE_JSON_PATH                update.json path in main (default .forgejo/update.json)
 #   SYNC_ROOT_PROP                  fork-owned module.prop in main kept at the released version
+#                                   (with an upstream, the release is named after upstream's
+#                                   version, not after this file's last release)
 #   CHANGELOG_PATH                  changelog file in the tree ("" = none)
 #   build()                         runs in the tree, leaves the module zip at "$OUT/module.zip"
 #   prebuilt()                      instead of merge + build: puts an upstream release zip at
@@ -169,16 +171,29 @@ out_dir; regular "$OUT/src"; regular "$OUT/desc"; regular "$OUT/module.zip"
 { read -r SRC_SHA; read -r UP_SHA; } < "$OUT/src"
 DESC="$(head -c 200 "$OUT/desc" | head -n1 | tr -cd '[:print:]')"
 [[ "$SRC_SHA" =~ ^[0-9a-f]{40}$ ]] || die "bad source sha"
+# upstream's tip, kept by sha: the bundle fetch below rewrites FETCH_HEAD
+MERGES=0 UP_TIP=""; ! declare -F prebuilt >/dev/null && [ -n "$UPSTREAM_URL" ] && MERGES=1
+if [ "$MERGES" = 1 ]; then git fetch -q "$UPSTREAM_URL" "$UPSTREAM_BRANCH"; UP_TIP="$(git rev-parse FETCH_HEAD)"; fi
 if [ "$SRC_SHA" != "$BASE_SHA" ]; then
     [[ "$UP_SHA" =~ ^[0-9a-f]{40}$ ]] || die "bad upstream sha"
-    git fetch -q "$UPSTREAM_URL" "$UPSTREAM_BRANCH"
-    git merge-base --is-ancestor "$UP_SHA" FETCH_HEAD || die "$UP_SHA is not on upstream $UPSTREAM_BRANCH"
+    git merge-base --is-ancestor "$UP_SHA" "$UP_TIP" || die "$UP_SHA is not on upstream $UPSTREAM_BRANCH"
     regular "$OUT/merge.bundle"
     git fetch -q "$OUT/merge.bundle" "main:refs/ci/merge"
     [ "$(git rev-parse refs/ci/merge)" = "$SRC_SHA" ] || die "bundle tip differs from the built sha"
     [ "$(git rev-parse "$SRC_SHA^1") $(git rev-parse "$SRC_SHA^2")" = "$BASE_SHA $UP_SHA" ] || die "merge parents differ"
     [ "$(git merge-tree --write-tree "$BASE_SHA" "$UP_SHA")" = "$(git rev-parse "$SRC_SHA^{tree}")" ] || die "merge tree differs"
     [ -z "$(git log --format=%B -1 "$SRC_SHA" | grep -iE 'co-authored|generated')" ] || die "trailer in merge message"
+fi
+# the code's version: main's SYNC_ROOT_PROP names the last release (the release commit
+# writes it), so with an upstream merged into main the version is upstream's, read at the
+# newest upstream commit in the built tree (not from src: the build user can write it)
+UP_VERSION=""
+if [ "$MERGES" = 1 ] && [ -n "$SYNC_ROOT_PROP" ]; then
+    UP_BASE="$(git merge-base "$UP_TIP" "$SRC_SHA" || true)"
+    if [ -n "$UP_BASE" ] && git show "$UP_BASE:$SYNC_ROOT_PROP" > "$REL/up.prop" 2>/dev/null; then
+        UP_VERSION="$(prop_get version "$REL/up.prop")"
+    fi
+    log "upstream ${UP_BASE:0:12} has version '$UP_VERSION'"
 fi
 cp "$OUT/module.zip" "$REL/module.zip"
 
@@ -187,7 +202,7 @@ unzip -p "$REL/module.zip" module.prop > "$REL/built.prop" || die "zip has no mo
 BUILT_VERSION="$(prop_get version "$REL/built.prop")"
 BUILT_VC="$(prop_get versionCode "$REL/built.prop")"
 case "$BUILT_VC" in ''|*[!0-9]*) die "built versionCode '$BUILT_VC' is not a number" ;; esac
-VERSION="$(printf '%s' "$BUILT_VERSION" | sed -E 's/-(fork|ci)[0-9]+$//')-ci$RUN_NUMBER"
+VERSION="$(printf '%s' "${UP_VERSION:-$BUILT_VERSION}" | sed -E 's/-(fork|ci)[0-9]+$//')-ci$RUN_NUMBER"
 VC=$((BUILT_VC + VERSION_CODE_OFFSET))
 [ "$VC" -ge "$VERSION_CODE_FLOOR" ] || die "versionCode $VC is below the floor $VERSION_CODE_FLOOR"
 TAG="$(printf '%s' "$VERSION" | sed -E 's/[^A-Za-z0-9._-]+/-/g; s/-+/-/g; s/^-//; s/-$//')"

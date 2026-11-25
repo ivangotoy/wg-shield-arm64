@@ -7,6 +7,10 @@ One phone Back leaves Help.
 * **One phone Back leaves Help** - the contents and the links to other sections no longer add steps to the phone's Back, however many sections you opened
 * The module's scripts are unchanged
 
+### Fork fixes after 2.9.1-ci6
+
+* **Release pipeline: a release is named after the code it carries** - the fork's `module.prop` on main holds the last release's version (the release writes it there), and a merge of a newer upstream keeps that line, so a build of upstream 2.9.4 would have been published as `2.9.1-ci<run>`. With an upstream merged into main, the release takes upstream's version (from its `module.prop` at the newest upstream commit in the build) and adds `-ci<run>`; the versionCode is counted on from main's as before
+
 ---
 
 ## 2.9.3

@@ -33,6 +33,12 @@
 #                 another folder: refused, nothing written there
 #   links_merge_in    the same, the merged upstream tracks .ci-out/src and
 #                 .ci-out/merge.bundle as links to files: not written through
+#   up_version    main has merged an upstream whose module.prop names a newer
+#                 version than main's (whose version lines the release commit
+#                 writes): the release is named after upstream's version, the
+#                 versionCode is main's + VERSION_CODE_OFFSET as always
+#   up_version_merge  the same main, the build step merged one more upstream
+#                 commit: the version is read at that commit, the merge pushed
 #   build_fail    the same, build() fails: the job fails, and the build user's
 #                 processes are still killed (the stub records the kill)
 #   build         (with TREE, a module source tree) the build step's own
@@ -162,6 +168,73 @@ with zipfile.ZipFile(sys.argv[1], "w", zipfile.ZIP_DEFLATED) as z:
         *) echo "$mode: rc=$rc delete=$del token_in_argv=$tok main_moved=$([ "$head0" != "$(git --git-dir="$BARE" rev-parse main)" ] && echo yes || echo no)" ;;
     esac
 done
+
+# up_version: a repo of its own on the fake forge (o/r is mapped to it by its
+# own gitconfig), an upstream in a local folder. Main's module.prop holds the
+# last release's lines (1.0-ci2, versionCode 5); upstream moved on to 1.1
+# (versionCode 3) and main merged it keeping its own lines, as a hand merge
+# of the conflict does. The build note's upstream sha (src, the build user's
+# file) names the older upstream commit: it is not what the name comes from.
+U="$D/up_version"; mkdir -p "$U/work/.ci-out" "$U/fake"
+gu() { git -C "$1" -c user.name=Test -c user.email=test@example.invalid "${@:2}"; }
+git init -q -b main "$U/up"
+printf '%s\n' id=demo name=Demo version=1.0 versionCode=3 > "$U/up/module.prop"
+gu "$U/up" add -A; gu "$U/up" commit -q -m 'upstream 1.0'
+UP1=$(git -C "$U/up" rev-parse HEAD)
+git clone -q "$U/up" "$U/fork"
+mkdir -p "$U/fork/.forgejo"
+printf '%s\n' ZIP_PREFIX=demo VERSION_CODE_FLOOR=1 UPDATE_JSON_PATH=update.json SYNC_ROOT_PROP=module.prop \
+    "UPSTREAM_URL=$U/up" UPSTREAM_BRANCH=main 'build() { :; }' > "$U/fork/.forgejo/module-ci.conf"
+printf '%s\n' id=demo name=Demo version=1.0-ci2 versionCode=5 "updateJson=$FORGE/o/r/raw/branch/main/update.json" > "$U/fork/module.prop"
+printf '{}\n' > "$U/fork/update.json"
+gu "$U/fork" add -A; gu "$U/fork" commit -q -m 'fork, release 1.0-ci2'
+printf '%s\n' id=demo name=Demo version=1.1 versionCode=3 > "$U/up/module.prop"
+gu "$U/up" commit -q -am 'upstream 1.1'
+gu "$U/fork" fetch -q "$U/up" main
+gu "$U/fork" merge -q --no-edit -s ours FETCH_HEAD
+git init -q --bare -b main "$U/forge.git"
+git -C "$U/fork" push -q "$U/forge.git" main
+UB=$(git -C "$U/fork" rev-parse HEAD)
+printf '[url "%s"]\n\tinsteadOf = %s/o/r.git\n' "$U/forge.git" "$FORGE" > "$U/gitconfig"
+printf '%s\n%s\n' "$UB" "$UP1" > "$U/work/.ci-out/src"
+: > "$U/work/.ci-out/desc"
+python3 -I -c 'import sys, zipfile
+with zipfile.ZipFile(sys.argv[1], "w", zipfile.ZIP_DEFLATED) as z:
+    z.write(sys.argv[2], "module.prop")' "$U/work/.ci-out/module.zip" "$U/fork/module.prop"
+( cd "$U" && env PATH="$D/bin:$PATH" HOME="$D/home" TMPDIR="$D/tmp" GIT_CONFIG_GLOBAL="$U/gitconfig" GIT_CONFIG_NOSYSTEM=1 \
+    CI_FAKE="$U/fake" CI_FAKE_MODE=ok CI_FAKE_SHA="$UB" CI_FAKE_BARE="$U/forge.git" \
+    RELEASE_TOKEN=tok-example SERVER_URL="$FORGE" REPOSITORY=o/r BASE_SHA="$UB" RUN_NUMBER=3 \
+    bash "$S" release "$U/work" > "$U/log" 2>&1 )
+rc=$?
+uj=$(git --git-dir="$U/forge.git" show main:update.json | python3 -I -c 'import json, sys; d = json.load(sys.stdin); print(d.get("version"), d.get("versionCode"))')
+echo "up_version: rc=$rc update_json=$uj $(git --git-dir="$U/forge.git" show main:module.prop | grep -E '^(version|versionCode)=' | tr '\n' ' ' | sed 's/ $//')"
+# up_version_merge: the same main, upstream gained a commit that leaves
+# module.prop alone; the build step merged it (merge commit, merge.bundle and
+# src made as module-ci.sh build makes them): the release takes the version at
+# that upstream commit too, and pushes the merge
+M="$D/up_version_merge"; mkdir -p "$M/work/.ci-out" "$M/fake"
+printf 'b\n' > "$U/up/b"; gu "$U/up" add b; gu "$U/up" commit -q -m 'upstream: b'
+UP3=$(git -C "$U/up" rev-parse HEAD)
+git init -q --bare -b main "$M/forge.git"
+git -C "$U/fork" push -q "$M/forge.git" main
+git clone -q "$M/forge.git" "$M/b"
+gu "$M/b" fetch -q "$U/up" main
+gu "$M/b" merge -q --no-ff --no-edit -m "Merge up main ${UP3:0:12}" FETCH_HEAD
+MS=$(git -C "$M/b" rev-parse HEAD)
+git -C "$M/b" bundle create -q "$M/work/.ci-out/merge.bundle" "$UB..main"
+printf '%s\n%s\n' "$MS" "$UP3" > "$M/work/.ci-out/src"
+: > "$M/work/.ci-out/desc"
+python3 -I -c 'import sys, zipfile
+with zipfile.ZipFile(sys.argv[1], "w", zipfile.ZIP_DEFLATED) as z:
+    z.write(sys.argv[2], "module.prop")' "$M/work/.ci-out/module.zip" "$M/b/module.prop"
+printf '[url "%s"]\n\tinsteadOf = %s/o/r.git\n' "$M/forge.git" "$FORGE" > "$M/gitconfig"
+( cd "$M" && env PATH="$D/bin:$PATH" HOME="$D/home" TMPDIR="$D/tmp" GIT_CONFIG_GLOBAL="$M/gitconfig" GIT_CONFIG_NOSYSTEM=1 \
+    CI_FAKE="$M/fake" CI_FAKE_MODE=ok CI_FAKE_SHA="$MS" CI_FAKE_BARE="$M/forge.git" \
+    RELEASE_TOKEN=tok-example SERVER_URL="$FORGE" REPOSITORY=o/r BASE_SHA="$UB" RUN_NUMBER=3 \
+    bash "$S" release "$M/work" > "$M/log" 2>&1 )
+rc=$?
+uj=$(git --git-dir="$M/forge.git" show main:update.json | python3 -I -c 'import json, sys; d = json.load(sys.stdin); print(d.get("version"), d.get("versionCode"))')
+echo "up_version_merge: rc=$rc update_json=$uj merge_on_main=$(git --git-dir="$M/forge.git" merge-base --is-ancestor "$MS" main 2>/dev/null && echo yes || echo no)"
 
 # the build step as root, after a build user that planted links: setpriv
 # runs only the build user's bash (as this user, never `kill -9 -1`: any other
