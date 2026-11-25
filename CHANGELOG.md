@@ -1,5 +1,34 @@
 # Changelog
 
+## 2.9.4
+
+One phone Back leaves Help.
+
+* **One phone Back leaves Help** - the contents and the links to other sections no longer add steps to the phone's Back, however many sections you opened
+* The module's scripts are unchanged
+
+---
+
+## 2.9.3
+
+Help reads better on the phone.
+
+* **Help reads better on the phone** - table rows are stacked (the name on top, its text under it at full width, no more sideways scrolling), every example command sits in a box with its own **COPY** button (only that one command is copied, never its comment), and an arrow at the bottom right jumps back to the top
+* **Help ‹ BACK returns to the dashboard** also after a jump through the contents (it went back only to the top of Help)
+* The module's scripts and the WebUI are unchanged
+
+---
+
+## 2.9.2
+
+Fixes after 2.9.1 - most of them by [ivangotoy](https://github.com/ivangotoy) (PR #4): security, IPv6, file handling and WebUI messages.
+
+* **WebUI: a star shows at once** - a star tapped while the 4-second status read was still running showed only at the next one; the list now refreshes right after the change
+* **WebUI: no "invalid file" row while a tunnel is deleted** - a status read that ran during *Delete* could list the tunnel for a moment as "invalid file - import it again"; a tunnel whose file is gone is left out
+* **WebUI: the Backup card follows a backup made in the terminal** - `ctl.sh backup` / `delbackup` showed in the Tunnels tab only after opening it again; the card now reloads when the backup zip changes
+
+---
+
 ## Fork fixes after 2.9.1-ci5
 
 * **DNS Test and Leak Test say when the browser does not open** - the buttons hand the site to the phone's browser (`am start`); when that failed (no root bridge, the command refused, *Activity not started*) nothing happened and nothing was shown. A message says so now
