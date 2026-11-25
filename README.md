@@ -318,3 +318,7 @@ The build is reproducible with zig 0.16.0. SHA-256 of the files in the release:
 The module (scripts, WebUI) is [MIT](LICENSE). `system/bin/wg` (wireguard-tools) and `system/bin/awg` (amneziawg-tools) are GPL-2.0 - see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 "WireGuard" and the "WireGuard" logo are registered trademarks of Jason A. Donenfeld. WG Shield is not affiliated with or endorsed by the WireGuard or AmneziaWG projects.
+
+## More KernelSU modules
+
+Check out my other great KernelSU modules here: https://git.digtvbg.com/explore/repos?q=kernelsu-module&topic=1
