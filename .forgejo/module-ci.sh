@@ -21,6 +21,8 @@
 #   VERSION_CODE_OFFSET             added to the built versionCode (default 0)
 #   UPDATE_JSON_PATH                update.json path in main (default .forgejo/update.json)
 #   SYNC_ROOT_PROP                  fork-owned module.prop in main kept at the released version
+#                                   (an upstream merge that conflicts only in its version= /
+#                                   versionCode= lines or in UPDATE_JSON_PATH keeps main's side)
 #                                   (with an upstream, the release is named after upstream's
 #                                   version, not after this file's last release)
 #   CHANGELOG_PATH                  changelog file in the tree ("" = none)
@@ -61,6 +63,45 @@ put_desc() {
     rm -f "$OUT/desc"
     printf '%s\n' "$DESC" > "$OUT/desc"
 }
+# ci_merge_tree OURS THEIRS - the tree of merging THEIRS into OURS, as git merges it. A
+# conflict only in what the release commit writes is resolved to OURS' side:
+# UPDATE_JSON_PATH as a whole, and in SYNC_ROOT_PROP the version= / versionCode= lines
+# (the file is merged again with both sides' and the base's lines set to OURS' values, so
+# THEIRS' other changes to it stay). Prints nothing and fails on any other conflict. The
+# build step merges with it, the release step checks the built merge against it.
+ci_merge_tree() {
+    local out tree mb tmp f mode blob v vc e rc=0
+    if out="$(git merge-tree --write-tree --no-messages --name-only "$1" "$2")"; then
+        printf '%s\n' "$out" | head -n1; return 0
+    fi
+    tree="$(printf '%s\n' "$out" | head -n1)"
+    [[ "$tree" =~ ^[0-9a-f]{40}$ ]] || return 1
+    mb="$(git merge-base "$1" "$2")" || return 1
+    tmp="$(mktemp -d)" || return 1
+    GIT_INDEX_FILE="$tmp/index" git read-tree "$tree" || rc=1
+    while [ "$rc" = 0 ] && IFS= read -r f; do
+        [ -n "$f" ] || continue
+        mode="$(git ls-tree "$1" -- "$f" | cut -d' ' -f1)"
+        case "$mode" in 100644|100755) ;; *) rc=1; break ;; esac
+        if [ "$f" = "$UPDATE_JSON_PATH" ]; then
+            blob="$(git rev-parse "$1:$f")" || { rc=1; break; }
+        elif [ -n "$SYNC_ROOT_PROP" ] && [ "$f" = "$SYNC_ROOT_PROP" ]; then
+            if ! { git show "$1:$f" > "$tmp/ours" && git show "$mb:$f" > "$tmp/base" && git show "$2:$f" > "$tmp/theirs"; }; then rc=1; break; fi
+            v="$(prop_get version "$tmp/ours")"; vc="$(prop_get versionCode "$tmp/ours")"; e=""
+            [ -z "$v" ] || e="s|^version=.*|version=$(sedq "$v")|;"
+            [ -z "$vc" ] || e="$e s|^versionCode=.*|versionCode=$(sedq "$vc")|"
+            sed -i -E "$e" "$tmp/base" "$tmp/theirs" || { rc=1; break; }
+            git merge-file -q -p "$tmp/ours" "$tmp/base" "$tmp/theirs" > "$tmp/merged" || { rc=1; break; }
+            blob="$(git hash-object -w "$tmp/merged")" || { rc=1; break; }
+        else
+            rc=1; break
+        fi
+        GIT_INDEX_FILE="$tmp/index" git update-index --cacheinfo "$mode,$blob,$f" || rc=1
+    done < <(printf '%s\n' "$out" | tail -n +2 | LC_ALL=C sort -u)
+    if [ "$rc" = 0 ]; then tree="$(GIT_INDEX_FILE="$tmp/index" git write-tree)" || rc=1; fi
+    rm -rf "$tmp"
+    [ "$rc" = 0 ] && printf '%s\n' "$tree"
+}
 load_conf() {
     UPSTREAM_URL="" UPSTREAM_BRANCH="" ZIP_PREFIX="${REPOSITORY#*/}" VERSION_CODE_FLOOR=0 VERSION_CODE_OFFSET=0
     UPDATE_JSON_PATH=".forgejo/update.json" SYNC_ROOT_PROP="" CHANGELOG_PATH=""
@@ -88,8 +129,14 @@ if [ "$MODE" = build ]; then
         if git merge-base --is-ancestor "$UP_SHA" HEAD; then
             log "upstream $UP_SHA already merged"
         else
-            git merge -q --no-ff --no-edit -m "Merge $UP_NAME $UPSTREAM_BRANCH ${UP_SHA:0:12}" "$UP_SHA" \
-                || die "merge conflict with upstream $UP_SHA: resolve by hand"
+            MSG="Merge $UP_NAME $UPSTREAM_BRANCH ${UP_SHA:0:12}"
+            if ! git merge -q --no-ff --no-edit -m "$MSG" "$UP_SHA"; then
+                # a conflict only in the lines the release commit writes: main's side (ci_merge_tree)
+                git merge --abort
+                TREE="$(ci_merge_tree "$BASE_SHA" "$UP_SHA")" || die "merge conflict with upstream $UP_SHA: resolve by hand"
+                git checkout -q -B main "$(git commit-tree "$TREE" -p "$BASE_SHA" -p "$UP_SHA" -m "$MSG")"
+                log "merge conflict only in the release-written lines: main's side kept"
+            fi
         fi
         SRC_SHA="$(git rev-parse HEAD)"
         DESC="$UP_NAME@$UPSTREAM_BRANCH ${UP_SHA:0:12}"
@@ -181,7 +228,7 @@ if [ "$SRC_SHA" != "$BASE_SHA" ]; then
     git fetch -q "$OUT/merge.bundle" "main:refs/ci/merge"
     [ "$(git rev-parse refs/ci/merge)" = "$SRC_SHA" ] || die "bundle tip differs from the built sha"
     [ "$(git rev-parse "$SRC_SHA^1") $(git rev-parse "$SRC_SHA^2")" = "$BASE_SHA $UP_SHA" ] || die "merge parents differ"
-    [ "$(git merge-tree --write-tree "$BASE_SHA" "$UP_SHA")" = "$(git rev-parse "$SRC_SHA^{tree}")" ] || die "merge tree differs"
+    [ "$(ci_merge_tree "$BASE_SHA" "$UP_SHA")" = "$(git rev-parse "$SRC_SHA^{tree}")" ] || die "merge tree differs"
     [ -z "$(git log --format=%B -1 "$SRC_SHA" | grep -iE 'co-authored|generated')" ] || die "trailer in merge message"
 fi
 # the code's version: main's SYNC_ROOT_PROP names the last release (the release commit

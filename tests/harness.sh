@@ -2569,6 +2569,10 @@ if want ci_release; then
     check "build step: the merged upstream tracks .ci-out/src and .ci-out/merge.bundle as links: not written through" "links_merge_in: rc=0 secret=secret-example victim=victim-example desc=file desc_secret=0 other=" "$(echo "$out" | grep '^links_merge_in: ')"
     check "build step: the build user's processes are killed after a passing build" "links_desc kills: 1" "$(echo "$out" | grep '^links_desc kills: ')"
     check "build step: a failed build fails the job, the build user's processes still killed" "build_fail: rc=1 kills: 1" "$(echo "$out" | grep '^build_fail: ' | cut -d' ' -f1-2) $(echo "$out" | grep '^build_fail kills: ' | cut -d' ' -f2-)"
+    check "build step, upstream bumped its version: main's release lines kept, upstream's other changes merged, the release passes, named after upstream" "resolve_ok: build_rc=0 name=Demo Two version=1.0-ci2 versionCode=5 description=Demo module fork_feed=1 update_json_main=1 b=yes release_rc=0 released=1.1-ci3 5 merge_on_main=yes" "$(echo "$out" | grep '^resolve_ok: ')"
+    check "build step, a conflict in another file as well: stopped as before" "resolve_other: build_rc=1 stopped=1 main_at_base=yes zip=no" "$(echo "$out" | grep '^resolve_other: ')"
+    check "build step, a conflict in another line of module.prop as well: stopped as before" "resolve_prop: build_rc=1 stopped=1 main_at_base=yes zip=no" "$(echo "$out" | grep '^resolve_prop: ')"
+    check "release: a merge whose tree is not the repeated resolution is refused before any forge call" "resolve_tamper: build_rc=0 release_rc=1 calls=0 refused=1" "$(echo "$out" | grep '^resolve_tamper: ')"
     check "build step: the zip holds the module's files and THIRD_PARTY_NOTICES.md" "build: rc=0 top=LICENSE META-INF THIRD_PARTY_NOTICES.md action.sh ctl.sh customize.sh module.prop post-fs-data.sh service.sh sh system uninstall.sh webroot wg-shield.png" "$(echo "$out" | grep '^build: ')"
     check "build step: the copy of the tree holds no test run" no "$([ -e "$RUN/ci/build/tests/.run" ] && echo yes || echo no)"
 fi

@@ -41,6 +41,15 @@
 #                 commit: the version is read at that commit, the merge pushed
 #   build_fail    the same, build() fails: the job fails, and the build user's
 #                 processes are still killed (the stub records the kill)
+#   resolve_ok    the build step merges an upstream that bumped version,
+#                 versionCode, name and update.json: the conflict in the lines
+#                 the release commit writes keeps main's side, upstream's name
+#                 stays; the release passes its check, named after upstream
+#   resolve_other the same, plus a conflict in another file: the build stops
+#   resolve_prop  the same, plus a conflict in another line of module.prop:
+#                 the build stops
+#   resolve_tamper    resolve_ok's merge replaced by one with another tree
+#                 (upstream's version lines): refused before any forge call
 #   build         (with TREE, a module source tree) the build step's own
 #                 part (build-user) with TREE's module-ci.conf: what the
 #                 module zip holds at its top level
@@ -290,6 +299,75 @@ EOF
     if [ -L "$d" ]; then k="link"; elif [ -f "$d" ]; then k="file"; else k="none"; fi
     echo "$mode kills: $(grep -c -e '--reuid=1000 .*kill -9 -1' "$B/setpriv.log")"
     echo "$mode: rc=$rc secret=$(head -n1 "$B/secret" | tr -cd '[:print:]') victim=$(head -n1 "$B/victim" | tr -cd '[:print:]') desc=$k desc_secret=$(cat "$d" 2>/dev/null | grep -c secret-example) other=$(find "$B/other" -mindepth 1 -printf '%f\n' | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')"
+done
+
+# resolve_*: the build step merges an upstream that bumped its version. A
+# conflict only in what the release commit writes (update.json, the version=
+# and versionCode= lines of module.prop) keeps main's side, upstream's other
+# changes stay; the release check repeats that resolution. Any other conflict
+# stops the build. Each scenario: up/ (upstream), repo/ (the fork, SCRIPT as
+# its module-ci.sh), forge.git (main = the fork before the merge).
+rs_repos() {  # rs_repos DIR KIND (ok | other | prop)
+    git init -q -b main "$1/up"
+    printf '%s\n' id=demo name=Demo version=1.0 versionCode=3 'description=Demo module' updateJson=https://up.example.invalid/update.json > "$1/up/module.prop"
+    printf '{"version": "1.0"}\n' > "$1/up/update.json"; printf 'a\n' > "$1/up/a"
+    gu "$1/up" add -A; gu "$1/up" commit -q -m 'upstream 1.0'
+    git clone -q "$1/up" "$1/repo"
+    mkdir -p "$1/repo/.forgejo"; cp "$S" "$1/repo/.forgejo/module-ci.sh"
+    printf '%s\n' "UPSTREAM_URL=$1/up" UPSTREAM_BRANCH=main ZIP_PREFIX=demo VERSION_CODE_FLOOR=1 UPDATE_JSON_PATH=update.json \
+        SYNC_ROOT_PROP=module.prop 'build() { pack_paths module.prop a; }' > "$1/repo/.forgejo/module-ci.conf"
+    sed -i "s|^version=.*|version=1.0-ci2|; s|^versionCode=.*|versionCode=5|; s|^updateJson=.*|updateJson=$FORGE/o/r/raw/branch/main/update.json|" "$1/repo/module.prop"
+    printf '{"version": "1.0-ci2", "versionCode": 5}\n' > "$1/repo/update.json"
+    case "$2" in other) printf 'a fork\n' > "$1/repo/a" ;; prop) sed -i 's/^description=.*/description=Fork text/' "$1/repo/module.prop" ;; esac
+    gu "$1/repo" add -A; gu "$1/repo" commit -q -m 'fork, release 1.0-ci2'
+    sed -i 's/^name=.*/name=Demo Two/; s/^version=.*/version=1.1/; s/^versionCode=.*/versionCode=4/' "$1/up/module.prop"
+    printf '{"version": "1.1"}\n' > "$1/up/update.json"; printf 'b\n' > "$1/up/b"
+    case "$2" in other) printf 'a upstream\n' > "$1/up/a" ;; prop) sed -i 's/^description=.*/description=Upstream text/' "$1/up/module.prop" ;; esac
+    gu "$1/up" add -A; gu "$1/up" commit -q -m 'upstream 1.1'
+    RS_BASE=$(git -C "$1/repo" rev-parse HEAD)
+    git init -q --bare -b main "$1/forge.git"
+    git -C "$1/repo" push -q "$1/forge.git" main
+    printf '[url "%s"]\n\tinsteadOf = %s/o/r.git\n' "$1/forge.git" "$FORGE" > "$1/gitconfig"
+}
+rs_build() {  # rs_build DIR - the build step, as root (stubs as above)
+    ( cd "$1" && env PATH="$D/bin:$PATH" SETPRIV_LOG="$1/setpriv.log" HOME="$D/home" TMPDIR="$D/tmp" GIT_CONFIG_GLOBAL="$1/gitconfig" GIT_CONFIG_NOSYSTEM=1 \
+        SERVER_URL="$FORGE" REPOSITORY=o/r BASE_SHA="$RS_BASE" bash "$S" build "$1/repo" > "$1/build.log" 2>&1 )
+}
+rs_release() {  # rs_release DIR - the release step on the build's results
+    ( cd "$1" && env PATH="$D/bin:$PATH" HOME="$D/home" TMPDIR="$D/tmp" GIT_CONFIG_GLOBAL="$1/gitconfig" GIT_CONFIG_NOSYSTEM=1 \
+        CI_FAKE="$1/fake" CI_FAKE_MODE=ok CI_FAKE_SHA="$(sed -n 1p "$1/repo/.ci-out/src" 2>/dev/null)" CI_FAKE_BARE="$1/forge.git" \
+        RELEASE_TOKEN=tok-example SERVER_URL="$FORGE" REPOSITORY=o/r BASE_SHA="$RS_BASE" RUN_NUMBER=3 \
+        bash "$S" release "$1/repo" > "$1/release.log" 2>&1 )
+}
+rs_prop() { git -C "$1/repo" show "HEAD:module.prop" 2>/dev/null | grep -E "^($2)=" | tr '\n' ' ' | sed 's/ $//'; }
+for mode in resolve_ok resolve_other resolve_prop resolve_tamper; do
+    R="$D/$mode"; mkdir -p "$R/fake"
+    case "$mode" in resolve_other) rs_repos "$R" other ;; resolve_prop) rs_repos "$R" prop ;; *) rs_repos "$R" ok ;; esac
+    rs_build "$R"; brc=$?
+    case "$mode" in
+        resolve_ok)
+            m=$(git -C "$R/repo" rev-parse HEAD)
+            rs_release "$R"; rrc=$?
+            uj=$(git --git-dir="$R/forge.git" show main:update.json | python3 -I -c 'import json, sys; d = json.load(sys.stdin); print(d.get("version"), d.get("versionCode"))')
+            echo "$mode: build_rc=$brc $(rs_prop "$R" 'name|version|versionCode|description') fork_feed=$(rs_prop "$R" updateJson | grep -c "$FORGE") update_json_main=$(git -C "$R/repo" show HEAD:update.json 2>/dev/null | grep -c '1.0-ci2') b=$(git -C "$R/repo" cat-file -e HEAD:b 2>/dev/null && echo yes || echo no) release_rc=$rrc released=$uj merge_on_main=$(git --git-dir="$R/forge.git" merge-base --is-ancestor "$m" main 2>/dev/null && echo yes || echo no)" ;;
+        resolve_tamper)
+            # the merge on main carries upstream's version lines instead of main's:
+            # same parents, another tree; bundle and src made for it
+            if [ "$brc" = 0 ]; then
+                ti="$R/tamper.idx"; mt=$(git -C "$R/repo" rev-parse "HEAD^{tree}")
+                GIT_INDEX_FILE="$ti" git -C "$R/repo" read-tree "$mt"
+                bl=$(git -C "$R/up" show HEAD:module.prop | git -C "$R/repo" hash-object -w --stdin)
+                GIT_INDEX_FILE="$ti" git -C "$R/repo" update-index --cacheinfo "100644,$bl,module.prop"
+                tt=$(GIT_INDEX_FILE="$ti" git -C "$R/repo" write-tree)
+                tm=$(gu "$R/repo" commit-tree "$tt" -p "$RS_BASE" -p "$(git -C "$R/up" rev-parse HEAD)" -m "Merge up main")
+                git -C "$R/repo" update-ref refs/heads/main "$tm"
+                rm -f "$R/repo/.ci-out/merge.bundle"; git -C "$R/repo" bundle create -q "$R/repo/.ci-out/merge.bundle" "$RS_BASE..main"
+                printf '%s\n%s\n' "$tm" "$(git -C "$R/up" rev-parse HEAD)" > "$R/repo/.ci-out/src"
+            fi
+            rs_release "$R"; rrc=$?
+            echo "$mode: build_rc=$brc release_rc=$rrc calls=$(cat "$R/fake/calls" 2>/dev/null | grep -c .) refused=$(grep -c 'merge tree differs' "$R/release.log")" ;;
+        *) echo "$mode: build_rc=$brc stopped=$(grep -c 'merge conflict with upstream' "$R/build.log") main_at_base=$([ "$(git -C "$R/repo" rev-parse HEAD)" = "$RS_BASE" ] && echo yes || echo no) zip=$([ -f "$R/repo/.ci-out/module.zip" ] && echo yes || echo no)" ;;
+    esac
 done
 
 if [ -n "$TREE" ]; then

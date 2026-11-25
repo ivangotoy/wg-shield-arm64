@@ -10,6 +10,7 @@ One phone Back leaves Help.
 ### Fork fixes after 2.9.1-ci6
 
 * **Release pipeline: a release is named after the code it carries** - the fork's `module.prop` on main holds the last release's version (the release writes it there), and a merge of a newer upstream keeps that line, so a build of upstream 2.9.4 would have been published as `2.9.1-ci<run>`. With an upstream merged into main, the release takes upstream's version (from its `module.prop` at the newest upstream commit in the build) and adds `-ci<run>`; the versionCode is counted on from main's as before
+* **Release pipeline: an upstream release no longer stops the build** - every upstream version bump edits the `version=` / `versionCode=` lines of `module.prop` and `update.json`, which the fork's release commit writes too, so the build's merge with upstream stopped with a conflict to resolve by hand. A conflict only there now keeps main's side (upstream's other changes to `module.prop` are merged), and the release step checks the merge against the same resolution; any other conflict still stops the build
 
 ---
 
