@@ -922,15 +922,45 @@ if want landns6; then
     else
         # "-m mark" as nft's own meta mark (see dns_route: without xt_mark
         # the host's iptables-nft would match everything)
+        # When the host cannot provide a REJECT target (no reject module
+        # loadable, e.g. the running kernel's modules removed by an update
+        # since boot), the REJECT rules go in as nft drop rules tagged with a
+        # comment; when its iptables-nft cannot show a meta mark mask (same
+        # cause: the mark extension unknown to the kernel, shown as /0x0), the
+        # mark rules carry their mask in a comment. The listings (ip6s for the
+        # module, ip6r -S for the cases) show them as the rules they stand
+        # for. Either way the packet does not leave, which the cases measure.
+        _rj=REJECT; _mk=plain
+        if "$IP6R" -w -t filter -N wgs_probe 2>/dev/null; then
+            "$IP6R" -w -t filter -A wgs_probe -p udp --dport 53 -j REJECT 2>/dev/null || _rj=drop
+            nft add rule ip6 filter wgs_probe meta mark and 0xffff == 0x69 return 2>/dev/null
+            [ "$("$IP6R" -w -t filter -S wgs_probe 2>/dev/null | grep -c -- '--mark 0x69/0xffff -j RETURN')" = 1 ] || _mk=tag
+            "$IP6R" -w -t filter -F wgs_probe 2>/dev/null; "$IP6R" -w -t filter -X wgs_probe 2>/dev/null
+        fi
+        _emu=0; [ "$_rj" = REJECT ] && [ "$_mk" = plain ] || _emu=1
+        [ "$_emu" = 0 ] || echo "  note: emulated on this host: REJECT target $_rj, meta mark listing $_mk"
+        cat > "$FAKES/ip6fix.sed" <<'EOF'
+s/ -m mark --mark \(0x[0-9a-f]*\)\/0x0 -m comment --comment "*wgs-harness-mark=\1\/\(0x[0-9a-f]*\)"* -j RETURN$/ -m mark --mark \1\/\2 -j RETURN/
+s/ -m comment --comment "*wgs-harness-REJECT"* -j DROP$/ -j REJECT/
+EOF
         cat > "$FAKES/ip6r" <<EOF
 #!/bin/sh
 case "\$*" in
-    *" -t filter -A "*" -m mark --mark "*" -j RETURN") set -- \$*; exec nft add rule ip6 filter "\$5" meta mark and "\${9#*/}" == "\${9%/*}" return ;;
+    *" -t filter -A "*" -m mark --mark "*" -j RETURN") set -- \$*
+        [ "$_mk" = tag ] && exec nft add rule ip6 filter "\$5" meta mark and "\${9#*/}" == "\${9%/*}" return comment "\"wgs-harness-mark=\$9\""
+        exec nft add rule ip6 filter "\$5" meta mark and "\${9#*/}" == "\${9%/*}" return ;;
+    *" -t filter -A "*" -o "*" -p "*" --dport "*" -j REJECT") [ "$_rj" = drop ] && { set -- \$*; exec nft add rule ip6 filter "\$5" oifname "\$7" "\$9" dport "\${11}" counter drop comment '"wgs-harness-REJECT"'; } ;;
+    *" -S"*) [ "$_emu" = 1 ] && { "$IP6R" "\$@" 2>/dev/null | sed -f "$FAKES/ip6fix.sed"; exit 0; } ;;
 esac
 exec "$IP6R" "\$@"
 EOF
-        chmod 755 "$FAKES/ip6r"
-        r6ctl() { WGS_IPTS6=$(command -v ip6tables-save) WGS_IPT6="$FAKES/ip6r" ctl "$@"; }
+        if [ "$_emu" = 1 ]; then
+            printf '#!/bin/sh\n"%s" "$@" 2>/dev/null | sed -f "%s"\n' "$(command -v ip6tables-save)" "$FAKES/ip6fix.sed" > "$FAKES/ip6s"
+        else
+            printf '#!/bin/sh\nexec "%s" "$@"\n' "$(command -v ip6tables-save)" > "$FAKES/ip6s"
+        fi
+        chmod 755 "$FAKES/ip6r" "$FAKES/ip6s"
+        r6ctl() { WGS_IPTS6="$FAKES/ip6s" WGS_IPT6="$FAKES/ip6r" ctl "$@"; }
         export WGS_IP="$FAKES/ipn"
         reset_state; rm -rf "$WGS_IPT_DIR"
         echo 0 > "$WGS_PROC6/all/disable_ipv6"; mkdir -p "$WGS_PROC6/wgs0"; echo 0 > "$WGS_PROC6/wgs0/disable_ipv6"
@@ -976,7 +1006,7 @@ except OSError:
         # a carrier service network on the Wi-Fi's interface stays outside: its mark RETURNs
         ip rule add pref 16000 fwmark 0xd0069/0xdffff iif lo lookup 1028; ip -6 rule add pref 16000 fwmark 0xd0069/0xdffff iif lo lookup 1028
         r6ctl status >/dev/null
-        check "LAN DNS on: a network that stays outside keeps its IPv6 resolver" "1 wlan0" "$("$IP6R" -w -t filter -S | grep -c -- '--mark 0x69/0xffff -j RETURN') $(q6 fd11::1 0xd0069)"
+        check "LAN DNS on: a network that stays outside keeps its IPv6 resolver" "1 wlan0" "$("$FAKES/ip6r" -w -t filter -S | grep -c -- '--mark 0x69/0xffff -j RETURN') $(q6 fd11::1 0xd0069)"
         ip rule del pref 16000 fwmark 0xd0069/0xdffff iif lo lookup 1028; ip -6 rule del pref 16000 fwmark 0xd0069/0xdffff iif lo lookup 1028
         r6ctl status >/dev/null
         r6ctl set killswitch 0 >/dev/null
@@ -1017,10 +1047,10 @@ exit \$rc
 EOF
         chmod 755 "$FAKES/ip6q"; rm -f "$RUN/midq6.out"; : > "$RUN/midq6.on"
         ip rule add pref 16000 fwmark 0x10068/0x1ffff iif lo lookup 1031
-        WGS_IPTS6=$(command -v ip6tables-save) WGS_IPT6="$FAKES/ip6q" ctl status >/dev/null
+        WGS_IPTS6="$FAKES/ip6s" WGS_IPT6="$FAKES/ip6q" ctl status >/dev/null
         rm -f "$RUN/midq6.on"
         check "rebuild: queries while the old chain went: none reached the router" "yes 0" "$([ -s "$RUN/midq6.out" ] && echo yes || echo no) $(grep -vc '^none$' "$RUN/midq6.out" 2>/dev/null)"
-        check "rebuild: the network Android checks keeps its resolver, one jump" "1 1 none" "$("$IP6R" -w -t filter -S | grep -c -- '--mark 0x68/0xffff -j RETURN') $("$IP6R" -w -t filter -S OUTPUT | grep -c -- '-j wgs_dnsb') $(q6 fd11::1)"
+        check "rebuild: the network Android checks keeps its resolver, one jump" "1 1 none" "$("$FAKES/ip6r" -w -t filter -S | grep -c -- '--mark 0x68/0xffff -j RETURN') $("$IP6R" -w -t filter -S OUTPUT | grep -c -- '-j wgs_dnsb') $(q6 fd11::1)"
         ip rule del pref 16000 fwmark 0x10068/0x1ffff iif lo lookup 1031
         r6ctl status >/dev/null
         # removed by someone else: back at the next tick
@@ -1034,7 +1064,7 @@ EOF
         if [ "$_live" = wgs_dnsb ]; then _gone=wgs_dnsb_n; else _gone=wgs_dnsb; fi
         sed -i "1s/.*/$_gone/" "$STATE/dns6b.want"
         rm -f "$RUN/midq6.out"; : > "$RUN/midq6.on"
-        WGS_IPTS6=$(command -v ip6tables-save) WGS_IPT6="$FAKES/ip6q" ctl status >/dev/null
+        WGS_IPTS6="$FAKES/ip6s" WGS_IPT6="$FAKES/ip6q" ctl status >/dev/null
         rm -f "$RUN/midq6.on"
         check "killed rebuild: the next one lets no query reach the router, one jump" "yes 0 1 none" "$([ -s "$RUN/midq6.out" ] && echo yes || echo no) $(grep -vc '^none$' "$RUN/midq6.out" 2>/dev/null) $("$IP6R" -w -t filter -S OUTPUT | grep -c -- '-j wgs_dnsb') $(q6 fd11::1)"
         r6ctl set landns 0 >/dev/null
