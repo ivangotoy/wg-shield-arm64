@@ -1828,7 +1828,7 @@ EOF
     check "up: on by default, one rule for Play services' uid to the address ping resolved" "up 1 1 1" "$(st state) $(st gpay) $(r15) $(ip rule | grep -c '^5015:.* to 192.0.2.10 .*uidrange 10123-10123 lookup 1028')"
     check "Play services to the payment server: the Wi-Fi; another app to it: the tunnel" "wlan0 wgs0" "$(gms 192.0.2.10) $(app 192.0.2.10)"
     check "Play services to anything else: the tunnel" "wgs0 wgs0 wlan0" "$(gms 192.0.2.99) $(gms 1.1.1.1) $(gms 192.0.2.10)"
-    check "resolved through ping bound to wgs0, logged" "1 4 -c 1 -w 1 -I wgs0 payments-pa.googleapis.com 1 1" "$(calls 4) $(head -n 1 "$RUN/gp.calls") $(logn 'payments-pa.googleapis.com is 192.0.2.10') $(logn 'Play services (uid 10123)')"
+    check "resolved through ping bound to wgs0, logged" "1 4 -4 -c 1 -w 1 -I wgs0 payments-pa.googleapis.com 1 1" "$(calls 4) $(head -n 1 "$RUN/gp.calls") $(logn 'payments-pa.googleapis.com is 192.0.2.10') $(logn 'Play services (uid 10123)')"
     check "no IPv6 on the network: no IPv6 lookup, no IPv6 rule" "1 0 0" "$(calls 4) $(calls 6) $(r15v6)"
     ctl status >/dev/null; ctl status >/dev/null
     check "next ticks: not looked up again before the interval, nothing repaired" "1 1 0" "$(calls 4) $(r15) $(logn 'changed by someone else')"
@@ -1837,7 +1837,7 @@ EOF
     check "rotated answer: looked up after the interval, both addresses kept" "2 2 wlan0 wlan0 wgs0" "$(calls 4) $(r15) $(gms 192.0.2.10) $(gms 192.0.2.11) $(app 192.0.2.11)"
     # a lookup that gives nothing changes nothing
     : > "$RUN/gp4"; age; ctl status >/dev/null
-    check "failed lookup: the kept addresses stay" "3 2" "$(calls 4) $(r15)"
+    check "failed lookup (asked with -4, then without): the kept addresses stay" "4 2 -4 plain" "$(calls 4) $(r15) $(sed -n 3p "$RUN/gp.calls" | cut -d' ' -f2) $(sed -n 4p "$RUN/gp.calls" | grep -q ' -4 ' && echo -4 || echo plain)"
     # 192.0.2.10 not seen for longer than the window (100 s here): dropped
     now=$(cut -d. -f1 /proc/uptime)
     sed -i "s/^4 192.0.2.10 .*/4 192.0.2.10 $((now - 200))/" "$STATE/gpay"
@@ -1845,15 +1845,15 @@ EOF
     check "address not seen for the whole window: its rule gone, the other one stays" "1 wgs0 wlan0" "$(r15) $(gms 192.0.2.10) $(gms 192.0.2.11)"
     # the screen off with the Battery profile: nothing is pinged
     echo 1 > "$RUN/screen"; age; ctl status >/dev/null
-    check "Battery profile, screen off: no lookup, the rule stays" "4 1" "$(calls 4) $(r15)"
+    check "Battery profile, screen off: no lookup, the rule stays" "5 1" "$(calls 4) $(r15)"
     ctl set profile always >/dev/null
-    check "Always profile, screen off: looked up" "5 1" "$(calls 4) $(r15)"
+    check "Always profile, screen off: looked up" "6 1" "$(calls 4) $(r15)"
     ctl set profile battery >/dev/null; echo 2 > "$RUN/screen"
     # the setting
     check "set gpay: only 0 or 1" "0 1" "$(ctl set gpay x 2>&1 | kv ok) $(st gpay)"
     check "set gpay 0: no rule, Play services through the tunnel" "1 0 0 0 wgs0" "$(ctl set gpay 0 | kv ok) $(setting GPAY) $(st gpay) $(r15) $(gms 192.0.2.11)"
     ctl status >/dev/null
-    check "setting off: no lookup on later ticks" "5 0" "$(calls 4) $(r15)"
+    check "setting off: no lookup on later ticks" "6 0" "$(calls 4) $(r15)"
     check "set gpay 1: the rule again" "1 1 1 wlan0" "$(ctl set gpay 1 | kv ok) $(st gpay) $(r15) $(gms 192.0.2.11)"
     # settings written by an older version: no GPAY line = on
     grep -v '^GPAY=' "$WGS_DATA/settings.conf" > "$RUN/settings.old"; cp "$RUN/settings.old" "$WGS_DATA/settings.conf"
@@ -1938,6 +1938,35 @@ EOF
     b="$(calls 4) $(r15) $([ -f "$STATE/gpay_uid" ] && echo yes || echo no)"
     export WGS_PM="$FAKES/pm-gms"; ctl status >/dev/null
     check "uid lookup without an answer: no rule, no lookup; once pm answers: the rule" "0 0 no 1 1 wlan0" "$b $(calls 4) $(r15) $(gms 192.0.2.10)"
+    ctl down >/dev/null
+    # a ping that resolves both families (newer iputils): without -4 it names the IPv6 address
+    cat > "$FAKES/gpingu" <<EOF
+#!/bin/sh
+for a; do :; done
+[ "\$a" = payments-pa.googleapis.com ] || exit 1
+echo "4 \$*" >> "$RUN/gp.calls"
+case " \$* " in *" -4 "*) n=\$(cat "$RUN/gp4") ;; *) n=\$(cat "$RUN/gp6") ;; esac
+echo "PING \$a (\$n) 56 data bytes"
+exit 1
+EOF
+    # an old IPv4-only ping: refuses -4
+    cat > "$FAKES/gpingo" <<EOF
+#!/bin/sh
+for a; do :; done
+[ "\$a" = payments-pa.googleapis.com ] || exit 1
+echo "4 \$*" >> "$RUN/gp.calls"
+case " \$* " in *" -4 "*) echo "ping: invalid option -- '4'" >&2; exit 2 ;; esac
+echo "PING \$a (\$(cat "$RUN/gp4")) 56(84) bytes of data."
+exit 1
+EOF
+    chmod 755 "$FAKES/gpingu" "$FAKES/gpingo"
+    rm -f "$STATE/gpay" "$STATE/gpay_at"; : > "$RUN/gp.calls"
+    WGS_PING="$FAKES/gpingu" ctl up wg-GP-1 >/dev/null
+    check "ping resolving both families: asked for IPv4, its rule" "1 -4 1 1 wlan0" "$(calls 4) $(cut -d' ' -f2 "$RUN/gp.calls" | head -n 1) $(r15) $(ip rule | grep -c '^5015:.* to 192.0.2.10 ') $(gms 192.0.2.10)"
+    ctl down >/dev/null
+    rm -f "$STATE/gpay" "$STATE/gpay_at"; : > "$RUN/gp.calls"
+    WGS_PING="$FAKES/gpingo" ctl up wg-GP-1 >/dev/null
+    check "old ping that refuses -4: asked again without it, its rule" "2 -4 plain 1 wlan0" "$(calls 4) $(sed -n 1p "$RUN/gp.calls" | cut -d' ' -f2) $(sed -n 2p "$RUN/gp.calls" | grep -q ' -4 ' && echo -4 || echo plain) $(r15) $(gms 192.0.2.10)"
     ctl down >/dev/null
     export WGS_PM="$FAKES/pm" WGS_PING="$FAKES/ping" WGS_GETPROP="$FAKES/getprop"
     unset WGS_PING6 WGS_GPAY_KEEP

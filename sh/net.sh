@@ -312,7 +312,10 @@ gpay_refresh() {
     echo "$_gn $DEFN|$NID" > "$STATE/gpay_at"
     _gs=""
     # shellcheck disable=SC2153 # PING: sh/recover.sh
-    _ga=$(_gpay_ask "$PING"); ipv4_ok "$_ga" && _gs="4 $_ga"
+    # IPv4 asked for: a ping that resolves both families may name an IPv6
+    # address first; an old IPv4-only ping refuses -4 - then without it
+    _ga=$(_gpay_ask "$PING" -4); ipv4_ok "$_ga" || _ga=$(_gpay_ask "$PING")
+    ipv4_ok "$_ga" && _gs="4 $_ga"
     if gpay_net6; then
         if [ -x "$PING6" ]; then _ga=$(_gpay_ask "$PING6" -n); else _ga=$(_gpay_ask "$PING" -6 -n); fi
         _ga=$(ipv6_canon "$_ga") && _gs="$_gs${_gs:+
