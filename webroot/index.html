@@ -376,6 +376,10 @@
         <div class="rn"><b>LAN DNS through the tunnel</b><span>On: while the tunnel is up, name lookups sent to a resolver on your Wi-Fi (the router) go to the tunnel's DNS too, so the router does not see them. Names only the router knows (printer.lan) stop resolving. While the tunnel is connecting or down the router is asked again and sees those lookups - a login page (hotel, airport) needs that. Off (default): the router's resolver is asked directly. Nothing changes while DNSCrypt Proxy answers DNS.</span></div>
         <label class="sw" id="sw-ld"><input type="checkbox" id="cb-ld" onchange="setOpt(this, 'landns', 'LAN DNS through the tunnel')"><i></i></label>
       </div>
+      <div class="row">
+        <div class="rn"><b>Google Pay around the tunnel</b><span>On (default): Google Pay works while the tunnel is on. Google's payment server refuses payments that come from the tunnel's server, so only Google Play services' connections to that one server go out on your Wi-Fi or mobile data directly; the server's addresses are looked up again by themselves. Everything else stays in the tunnel. Off: Play services goes through the tunnel too, and adding a card or money with Google Pay can fail.</span></div>
+        <label class="sw" id="sw-gp"><input type="checkbox" id="cb-gp" onchange="setOpt(this, 'gpay', 'Google Pay around the tunnel')"><i></i></label>
+      </div>
       <div class="row col">
         <div class="rn"><b>Checks</b><span id="prof-note"></span></div>
         <div class="seg" id="prof-seg">
@@ -952,6 +956,7 @@ function renderSettings(st) {
   if (!$('sw-nt').classList.contains('busy')) $('cb-nt').checked = st.notify !== '0';
   if (!$('sw-ld').classList.contains('busy')) $('cb-ld').checked = st.landns === '1';
   if (!$('sw-ke').classList.contains('busy')) $('cb-ke').checked = st.ks_error === '1';
+  if (!$('sw-gp').classList.contains('busy')) $('cb-gp').checked = st.gpay !== '0';
   const prof = st.profile === 'always' ? 'always' : 'battery';
   document.querySelectorAll('#prof-seg button').forEach(b => b.classList.toggle('on', b.dataset.p === prof));
   const chk = st.checks === '5' || st.checks === 'off' ? st.checks : '30';

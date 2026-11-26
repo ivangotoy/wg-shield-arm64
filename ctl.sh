@@ -35,6 +35,7 @@ usage() {
         '  set profile battery|always  checks only with the screen on (default) / day and night' \
         '  set checks 5|30|off  ping through the tunnel every 5 s / 30 s (default) / never' \
         '  set landns 0|1      1 = while the tunnel is up, DNS to a resolver on the Wi-Fi (the router) goes to the tunnel DNS too' \
+        '  set gpay 0|1        1 = Google Pay: Play services reaches the Google payment server around the tunnel (default)' \
         '  restart             restart the watchdog and reconnect the tunnel' \
         '  notifytest          show a test notification' \
         '  log [lines|clear]   last log lines (default 40) / empty the log' \
@@ -58,9 +59,11 @@ ctl_lock() { lock_get 20 || fail "busy - try again"; }
 # caller ticks and releases)
 set_locked() {
     ctl_lock; settings_load
+    # shellcheck disable=SC2034 # the S_* are saved by settings_save (sh/common.sh)
     case "$1" in
         KILLSWITCH) S_KILLSWITCH=$2 ;; AUTOSWITCH) S_AUTOSWITCH=$2 ;; NOTIFY) S_NOTIFY=$2 ;;
         PROFILE) S_PROFILE=$2 ;; CHECKS) S_CHECKS=$2 ;; LANDNS) S_LANDNS=$2 ;; KS_ERROR) S_KS_ERROR=$2 ;;
+        GPAY) S_GPAY=$2 ;;
     esac
     settings_save || fail "cannot write $CONF"
 }
@@ -404,6 +407,11 @@ case "$cmd" in
                 case "$2" in 0|1) : ;; *) fail "usage: set landns 0|1" ;; esac
                 set_locked LANDNS "$2"
                 wlog INFO "ctl: LAN DNS through the tunnel $2"
+                tick_locked; print_status ;;
+            gpay|GPAY)
+                case "$2" in 0|1) : ;; *) fail "usage: set gpay 0|1" ;; esac
+                set_locked GPAY "$2"
+                wlog INFO "ctl: Google Pay around the tunnel $2"
                 tick_locked; print_status ;;
             *) fail "unknown setting: $1" ;;
         esac

@@ -1775,6 +1775,175 @@ EOF
     unset WGS_PROBELOG
 fi
 
+if want gpay; then
+    echo "gpay: only Play services' traffic to Google's payment server goes around the tunnel, addresses from Android's resolver"
+    if [ "${WGS_UIDS:-}" = 1 ]; then
+    reset_state; rm -rf "$WGS_IPT_DIR"
+    # Play services = uid 10123; ping / ping6 answer the payment server's
+    # name with the address in $RUN/gp4 / $RUN/gp6 (as Android's ping prints
+    # it), every call noted in $RUN/gp.calls
+    printf '#!/bin/sh\necho "package:com.android.captiveportallogin uid:10050"\necho "package:com.google.android.gms uid:10123"\necho "package:com.google.android.gms.policy_sidecar_aps uid:10124"\n' > "$FAKES/pm-gms"
+    printf '#!/bin/sh\necho "package:com.android.captiveportallogin uid:10050"\n' > "$FAKES/pm-nogms"
+    cat > "$FAKES/gping" <<EOF
+#!/bin/sh
+for a; do :; done
+[ "\$a" = payments-pa.googleapis.com ] || exit 1
+echo "4 \$*" >> "$RUN/gp.calls"
+[ -s "$RUN/gp4" ] || { echo "ping: unknown host \$a" >&2; exit 2; }
+echo "PING \$a (\$(cat "$RUN/gp4")) from 10.2.0.2 wgs0: 56(84) bytes of data."
+echo; echo "--- \$a ping statistics ---"; echo "1 packets transmitted, 0 received, 100% packet loss, time 0ms"
+exit 1
+EOF
+    cat > "$FAKES/gping6" <<EOF
+#!/bin/sh
+for a; do :; done
+[ "\$a" = payments-pa.googleapis.com ] || exit 1
+echo "6 \$*" >> "$RUN/gp.calls"
+[ -s "$RUN/gp6" ] || exit 2
+echo "PING \$a(\$(cat "$RUN/gp6")) from fd00::2 wgs0: 56 data bytes"
+exit 1
+EOF
+    cat > "$FAKES/getprop-s" <<EOF
+#!/bin/sh
+case "\$1" in sys.boot_completed) echo 1 ;; debug.tracing.screen_state) cat "$RUN/screen" ;; esac
+EOF
+    chmod 755 "$FAKES/pm-gms" "$FAKES/pm-nogms" "$FAKES/gping" "$FAKES/gping6" "$FAKES/getprop-s"
+    echo 2 > "$RUN/screen"; echo 192.0.2.10 > "$RUN/gp4"; echo 2001:DB8:0:0::10 > "$RUN/gp6"; : > "$RUN/gp.calls"
+    export WGS_PM="$FAKES/pm-gms" WGS_PING="$FAKES/gping" WGS_PING6="$FAKES/gping6" WGS_GETPROP="$FAKES/getprop-s" WGS_GPAY_KEEP=100
+    r15() { ip rule | grep -c '^5015:'; }
+    r15v6() { ip -6 rule | grep -c '^5015:'; }
+    # where a socket of uid U to ADDRESS goes: the interface, or blocked
+    via() { r=$(ip "$@" 2>&1 | head -n 1); case "$r" in *" dev "*) r=${r#* dev }; echo "${r%% *}" ;; *) echo blocked ;; esac; }
+    gms() { via route get "$1" uid 10123; }
+    app() { via route get "$1" uid 10200; }
+    calls() { grep -c "^$1 " "$RUN/gp.calls"; }
+    age() { sed -i 's/^[0-9]* /0 /' "$STATE/gpay_at"; }     # the last lookup long ago
+    logn() { grep -c -- "$1" "$WGS_DATA/logs/wg-shield.log"; }
+    conf "$WGS_DL/wg-GP-1.conf" 203.0.113.101:51820
+    ctl import wg-GP-1.conf >/dev/null
+    date +%s > "$STATE/fake_hs"
+    ctl up wg-GP-1 >/dev/null
+    check "up: on by default, one rule for Play services' uid to the address ping resolved" "up 1 1 1" "$(st state) $(st gpay) $(r15) $(ip rule | grep -c '^5015:.* to 192.0.2.10 .*uidrange 10123-10123 lookup 1028')"
+    check "Play services to the payment server: the Wi-Fi; another app to it: the tunnel" "wlan0 wgs0" "$(gms 192.0.2.10) $(app 192.0.2.10)"
+    check "Play services to anything else: the tunnel" "wgs0 wgs0 wlan0" "$(gms 192.0.2.99) $(gms 1.1.1.1) $(gms 192.0.2.10)"
+    check "resolved through ping bound to wgs0, logged" "1 4 -c 1 -w 1 -I wgs0 payments-pa.googleapis.com 1 1" "$(calls 4) $(head -n 1 "$RUN/gp.calls") $(logn 'payments-pa.googleapis.com is 192.0.2.10') $(logn 'Play services (uid 10123)')"
+    check "no IPv6 on the network: no IPv6 lookup, no IPv6 rule" "1 0 0" "$(calls 4) $(calls 6) $(r15v6)"
+    ctl status >/dev/null; ctl status >/dev/null
+    check "next ticks: not looked up again before the interval, nothing repaired" "1 1 0" "$(calls 4) $(r15) $(logn 'changed by someone else')"
+    # Google answers with another address: the old one stays
+    echo 192.0.2.11 > "$RUN/gp4"; age; ctl status >/dev/null
+    check "rotated answer: looked up after the interval, both addresses kept" "2 2 wlan0 wlan0 wgs0" "$(calls 4) $(r15) $(gms 192.0.2.10) $(gms 192.0.2.11) $(app 192.0.2.11)"
+    # a lookup that gives nothing changes nothing
+    : > "$RUN/gp4"; age; ctl status >/dev/null
+    check "failed lookup: the kept addresses stay" "3 2" "$(calls 4) $(r15)"
+    # 192.0.2.10 not seen for longer than the window (100 s here): dropped
+    now=$(cut -d. -f1 /proc/uptime)
+    sed -i "s/^4 192.0.2.10 .*/4 192.0.2.10 $((now - 200))/" "$STATE/gpay"
+    echo 192.0.2.11 > "$RUN/gp4"; age; ctl status >/dev/null
+    check "address not seen for the whole window: its rule gone, the other one stays" "1 wgs0 wlan0" "$(r15) $(gms 192.0.2.10) $(gms 192.0.2.11)"
+    # the screen off with the Battery profile: nothing is pinged
+    echo 1 > "$RUN/screen"; age; ctl status >/dev/null
+    check "Battery profile, screen off: no lookup, the rule stays" "4 1" "$(calls 4) $(r15)"
+    ctl set profile always >/dev/null
+    check "Always profile, screen off: looked up" "5 1" "$(calls 4) $(r15)"
+    ctl set profile battery >/dev/null; echo 2 > "$RUN/screen"
+    # the setting
+    check "set gpay: only 0 or 1" "0 1" "$(ctl set gpay x 2>&1 | kv ok) $(st gpay)"
+    check "set gpay 0: no rule, Play services through the tunnel" "1 0 0 0 wgs0" "$(ctl set gpay 0 | kv ok) $(setting GPAY) $(st gpay) $(r15) $(gms 192.0.2.11)"
+    ctl status >/dev/null
+    check "setting off: no lookup on later ticks" "5 0" "$(calls 4) $(r15)"
+    check "set gpay 1: the rule again" "1 1 1 wlan0" "$(ctl set gpay 1 | kv ok) $(st gpay) $(r15) $(gms 192.0.2.11)"
+    # settings written by an older version: no GPAY line = on
+    grep -v '^GPAY=' "$WGS_DATA/settings.conf" > "$RUN/settings.old"; cp "$RUN/settings.old" "$WGS_DATA/settings.conf"
+    ctl status >/dev/null
+    check "settings without the key: on" "1 1" "$(st gpay) $(r15)"
+    # the default network changes to mobile data: the rules follow it
+    ip link add rmnet7 type veth peer name rmnet7p && ip link set rmnet7p up && ip link set rmnet7 up
+    ip addr add 10.67.0.2/24 dev rmnet7; ip route add default dev rmnet7 table 1037
+    echo "1037 rmnet7" >> "$WGS_RT_TABLES"; echo "107 INTERNET&NOT_RESTRICTED&TRUSTED&VALIDATED" >> "$RUN/networks"
+    ip rule add pref 16000 fwmark 0x1006b/0x1ffff iif lo lookup 1037
+    ip rule del pref 31000; ip rule add pref 31000 fwmark 0x0/0xffff iif lo lookup 1037
+    c0=$(calls 4); ctl status >/dev/null
+    check "default network changed: looked up at once, the rule on the new network" "$((c0 + 1)) 1 1 rmnet7 wgs0" "$(calls 4) $(r15) $(ip rule | grep -c '^5015:.* to 192.0.2.11 .*lookup 1037') $(gms 192.0.2.11) $(app 192.0.2.11)"
+    ip rule del pref 31000; ip rule add pref 31000 fwmark 0x0/0xffff iif lo lookup 1028
+    ip rule del pref 16000 fwmark 0x1006b/0x1ffff iif lo lookup 1037
+    sed -i '/^107 /d' "$RUN/networks"; sed -i '/ rmnet7$/d' "$WGS_RT_TABLES"; ip link del rmnet7
+    ctl status >/dev/null
+    check "back on the Wi-Fi: the rule follows" "1 wlan0" "$(r15) $(gms 192.0.2.11)"
+    # the Wi-Fi gets IPv6: IPv6 addresses too
+    echo 0 > "$WGS_PROC6/all/disable_ipv6"
+    ip -6 addr add fd11::50/64 dev wlan0 nodad 2>/dev/null
+    ip -6 route add default via fd11::1 dev wlan0 table 1028 2>/dev/null
+    age; ctl status >/dev/null
+    check "network with IPv6: IPv6 looked up, its rule as ip lists the address" "1 1 1 wlan0 blocked" "$(calls 6) $(r15v6) $(ip -6 rule | grep -c '^5015:.* to 2001:db8::10 .*uidrange 10123-10123 lookup 1028') $(via -6 route get 2001:db8::10 uid 10123) $(via -6 route get 2001:db8::10 uid 10200)"
+    ip -6 route del default via fd11::1 dev wlan0 table 1028 2>/dev/null
+    ctl status >/dev/null
+    check "IPv6 gone from the network: no IPv6 rule, IPv4 kept" "0 1" "$(r15v6) $(r15)"
+    ip -6 route add default via fd11::1 dev wlan0 table 1028 2>/dev/null
+    ctl status >/dev/null
+    check "IPv6 back: its kept address again" 1 "$(r15v6)"
+    # the tunnel stops answering, kill switch on: everything else blocked, the payment server still reachable
+    echo $(( $(date +%s) - 400 )) > "$STATE/fake_hs"; ctl status >/dev/null
+    check "tunnel not answering, kill switch: the rule stays, the rest stays in" "notup 1 wlan0 wgs0" "$([ "$(st state)" = up ] && echo up || echo notup) $(r15) $(gms 192.0.2.11) $(gms 192.0.2.99)"
+    date +%s > "$STATE/fake_hs"; ctl status >/dev/null
+    # pause, an Android VPN, restart, off
+    b="$(r15) $(r15v6)"; ctl pause 5 >/dev/null
+    check "paused: no rule" "1 1 paused 0 0" "$b $(st state) $(r15) $(r15v6)"
+    ctl resume >/dev/null; ctl status >/dev/null
+    check "resumed: the rules again" "up 1 1" "$(st state) $(r15) $(r15v6)"
+    ip rule add pref 13000 fwmark 0x0/0x20000 iif lo uidrange 10000-19999 lookup 1028
+    b="$(r15) $(r15v6)"; ctl status >/dev/null
+    check "an Android VPN: steps aside, no rule" "1 1 paused android_vpn 0 0" "$b $(st state) $(st reason) $(r15) $(r15v6)"
+    ip rule del pref 13000; ctl status >/dev/null
+    check "the VPN gone: the rules again" "up 1 1" "$(st state) $(r15) $(r15v6)"
+    c0=$(calls 4)
+    ctl restart >/dev/null 2>&1; wd=$(cat "$STATE/watchdog.pid" 2>/dev/null); [ -n "$wd" ] && kill "$wd" 2>/dev/null; sleep 0.3
+    p=$(cat "$STATE/monitor.pid" 2>/dev/null); [ -n "$p" ] && kill "$p" 2>/dev/null
+    date +%s > "$STATE/fake_hs"; ctl status >/dev/null
+    check "restart: looked up again, exactly the wanted rules" "1 1 1 1" "$([ "$(calls 4)" -gt "$c0" ] && echo 1 || echo 0) $(r15) $(r15v6) $(ip rule | grep -c '^5015:.* to 192.0.2.11 ')"
+    b="$(r15) $(r15v6)"; ctl down >/dev/null
+    check "off: no rule in either family" "1 1 off 0 0 wlan0" "$b $(st state) $(r15) $(r15v6) $(gms 192.0.2.11)"
+    gpf() { find "$STATE" -maxdepth 1 -name 'gpay*' | grep -c .; }
+    b=$(gpf); $TSH "$MOD/post-fs-data.sh" >/dev/null 2>&1
+    check "boot: the addresses, the last lookup and the uid are forgotten" "3 0" "$b $(gpf)"
+    # no ping6 on the phone: ping -6
+    echo 0 > "$WGS_PROC6/all/disable_ipv6"; ip -6 route add default via fd11::1 dev wlan0 table 1028 2>/dev/null
+    cat > "$FAKES/gping46" <<EOF
+#!/bin/sh
+case "\$1" in -6) shift; exec "$FAKES/gping6" "\$@" ;; esac
+exec "$FAKES/gping" "\$@"
+EOF
+    chmod 755 "$FAKES/gping46"
+    : > "$RUN/gp.calls"
+    WGS_PING="$FAKES/gping46" WGS_PING6="$RUN/no-ping6" ctl up wg-GP-1 >/dev/null
+    check "no ping6: IPv6 looked up with ping -6" "1 1 1" "$(calls 4) $(calls 6) $(r15v6)"
+    ctl down >/dev/null
+    ip -6 route del default via fd11::1 dev wlan0 table 1028 2>/dev/null
+    ip -6 route del default via fd11::1 dev wlan0 table 1028 2>/dev/null
+    ip -6 addr del fd11::50/64 dev wlan0 2>/dev/null
+    echo 1 > "$WGS_PROC6/all/disable_ipv6"
+    # Play services not installed: nothing looked up, no rule
+    reset_state; : > "$RUN/gp.calls"; echo 192.0.2.10 > "$RUN/gp4"
+    export WGS_PM="$FAKES/pm-nogms"
+    ctl import wg-GP-1.conf >/dev/null; date +%s > "$STATE/fake_hs"; ctl up wg-GP-1 >/dev/null
+    check "no Play services uid: no lookup, no rule, said once in the log" "up 0 0 1" "$(st state) $(calls 4) $(r15) $(logn 'Play services is not installed')"
+    ctl down >/dev/null
+    # the package manager gives no answer (early boot): no rule, asked again at the next tick
+    reset_state; : > "$RUN/gp.calls"
+    printf '#!/bin/sh\nexit 1\n' > "$FAKES/pm-none"; chmod 755 "$FAKES/pm-none"
+    export WGS_PM="$FAKES/pm-none"
+    ctl import wg-GP-1.conf >/dev/null; date +%s > "$STATE/fake_hs"; ctl up wg-GP-1 >/dev/null
+    b="$(calls 4) $(r15) $([ -f "$STATE/gpay_uid" ] && echo yes || echo no)"
+    export WGS_PM="$FAKES/pm-gms"; ctl status >/dev/null
+    check "uid lookup without an answer: no rule, no lookup; once pm answers: the rule" "0 0 no 1 1 wlan0" "$b $(calls 4) $(r15) $(gms 192.0.2.10)"
+    ctl down >/dev/null
+    export WGS_PM="$FAKES/pm" WGS_PING="$FAKES/ping" WGS_GETPROP="$FAKES/getprop"
+    unset WGS_PING6 WGS_GPAY_KEEP
+    else
+        echo "  skip gpay (no --map-auto: uidrange rules need the uids)"
+    fi
+fi
+
 if want endpoint6; then
     echo "endpoint6: a literal IPv6 endpoint in brackets - import, rule 5000 in the IPv6 rules, switches, teardown"
     reset_state

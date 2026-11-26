@@ -60,7 +60,7 @@ RT_TABLES="${WGS_RT_TABLES:-/data/misc/net/rt_tables}"
 
 IFACE=wgs0
 TABLE=51820
-PREFS="5000 5001 5010 5011 5012 5013 5014 5020 5021 5022"
+PREFS="5000 5001 5010 5011 5012 5013 5014 5015 5020 5021 5022"
 DOWN_AFTER=180          # s without a handshake = tunnel down (WireGuard rejects keys after 180 s)
 TICK=10
 # Tunnel types: "wireguard" (plain configs, e.g. Proton) and "amneziawg"
@@ -192,7 +192,7 @@ ipv6_canon() {
 
 # ---- settings (KEY=value, whitelist, never sourced) ---------------------------
 settings_load() {
-    S_ACTIVE=""; S_LAST=""; S_KILLSWITCH=1; S_AUTOSWITCH=0; S_NOTIFY=1; S_PROFILE=battery; S_CHECKS=30; S_LANDNS=0; S_KS_ERROR=0
+    S_ACTIVE=""; S_LAST=""; S_KILLSWITCH=1; S_AUTOSWITCH=0; S_NOTIFY=1; S_PROFILE=battery; S_CHECKS=30; S_LANDNS=0; S_KS_ERROR=0; S_GPAY=1
     [ -f "$CONF" ] || return 0
     # "|| [ -n ]": a last line without a line break (edited by hand) counts too
     while IFS='=' read -r k v || [ -n "$k" ]; do
@@ -207,6 +207,7 @@ settings_load() {
             CHECKS) case "$v" in 5|30|off) S_CHECKS=$v ;; esac ;;
             LANDNS) case "$v" in 0|1) S_LANDNS=$v ;; esac ;;
             KS_ERROR) case "$v" in 0|1) S_KS_ERROR=$v ;; esac ;;
+            GPAY) case "$v" in 0|1) S_GPAY=$v ;; esac ;;
         esac
     done 2>/dev/null < "$CONF"
 }
@@ -224,6 +225,7 @@ settings_save() {
         echo "CHECKS=$S_CHECKS"
         echo "LANDNS=$S_LANDNS"
         echo "KS_ERROR=$S_KS_ERROR"
+        echo "GPAY=$S_GPAY"
     } > "$tmp" && chmod 600 "$tmp" && mv -f "$tmp" "$CONF" && return 0
     rm -f "$tmp"; return 1
 }
@@ -340,7 +342,8 @@ status_write() {
             "updated=$(epoch_now)" \
             "landns=$S_LANDNS" \
             "dns_lan=$ST_DNS_LAN" \
-            "ks_error=$S_KS_ERROR"
+            "ks_error=$S_KS_ERROR" \
+            "gpay=$S_GPAY"
     } > "$tmp" && chmod 644 "$tmp" && mv -f "$tmp" "$STATE/status"
     # a write that failed: its temp file goes (no process when it did not)
     [ ! -e "$tmp" ] || rm -f "$tmp"

@@ -8,6 +8,7 @@
 #   5012  iif lo lookup <default table> suppress_prefixlength 0          LAN, gateway
 #   5013  iif lo fwmark <other>/0xffff lookup <its table> suppress_prefixlength 0   its LAN stays local
 #   5014  iif lo fwmark <net>/0xffff uidrange <uid>-<uid> lookup <its table>      Android's own check of it, login page
+#   5015  iif lo uidrange <Play services> to <address> lookup <default net table>  Google Pay's payment server (gpay_*)
 #   5020  iif lo fwmark 0x0/0x10000        lookup 51820                  all traffic not bound to a network
 #   5021  iif lo fwmark <netId>/0xffff     lookup 51820                  traffic bound to the default network
 #   5022  iif lo fwmark <other>/0xffff     lookup 51820                  traffic bound to another internet network
@@ -241,12 +242,111 @@ exempt_uids() {
     unset _f _u _p
 }
 
+# Google Pay: Google's payment server refuses Play services' requests that
+# come from the tunnel's exit (HTTP 403, "Request Failed"). So only Play
+# services' traffic to the addresses of payments-pa.googleapis.com goes out
+# on the default network, around the tunnel (setting GPAY=1, on by default):
+#   5015  iif lo uidrange <uid>-<uid> to <address> lookup <default net table>
+# Every other app's traffic to those addresses, and all other traffic of
+# Play services, stays in the tunnel. Rules only while the tunnel captures
+# traffic (like 5014), from the addresses kept in $STATE/gpay.
+# The addresses come from Android's own resolver for the default network,
+# the one Play services asks: ping resolves the name through it (netd keeps
+# one answer cache per network, so this is the answer Play services gets)
+# and names the address in its first line; its one echo request is bound to
+# wgs0. A direct DNS query would miss that cache. Looked up while the tunnel
+# is up: when a tunnel is loaded, when the default network changes, then
+# every GPAY_EVERY s - with the Battery profile only while the screen is on
+# (nothing is pinged with the screen off). Google answers with other
+# addresses over time: every address seen in the last GPAY_KEEP s stays, at
+# most GPAY_MAX per family (the newest). IPv6 only when the default network
+# has IPv6 (ping6, or ping -6 where there is no ping6).
+# $STATE/gpay: "<4|6> <address> <seen, s since boot>"; $STATE/gpay_at: when,
+# and for which network, the last lookup ran; $STATE/gpay_uid: Play
+# services' uid (empty: not installed), looked up once like exempt_uids.
+GPAY_HOST=payments-pa.googleapis.com
+GPAY_PKG=com.google.android.gms
+GPAY_EVERY=${WGS_GPAY_EVERY:-60}
+GPAY_KEEP=${WGS_GPAY_KEEP:-86400}
+GPAY_MAX=32
+PING6="${WGS_PING6:-/system/bin/ping6}"
+gpay_uid() {
+    _f="$STATE/gpay_uid"
+    if [ ! -f "$_f" ] && [ "$("$GETPROP" sys.boot_completed 2>/dev/null)" = 1 ]; then
+        _p=$("$PM" list packages -U 2>/dev/null)
+        if [ -n "$_p" ]; then
+            _u=$(echo "$_p" | awk -v p="package:$GPAY_PKG" '$1 == p { for (i = 2; i <= NF; i++) if ($i ~ /^uid:[0-9]/) { u = substr($i, 5); sub(/[^0-9].*/, "", u); print u; exit } }')
+            echo "$_u" > "$_f.tmp.$$" && mv -f "$_f.tmp.$$" "$_f"
+            [ ! -e "$_f.tmp.$$" ] || rm -f "$_f.tmp.$$"
+            if [ -n "$_u" ]; then wlog INFO "Google Pay: Play services (uid $_u) reaches $GPAY_HOST around the tunnel"
+            else wlog INFO "Google Pay: Play services is not installed - nothing goes around the tunnel"; fi
+        fi
+    fi
+    cat "$_f" 2>/dev/null
+    unset _f _u _p
+}
+# gpay_net6 - the default network has IPv6 (and IPv6 is on for the phone)
+gpay_net6() {
+    v6_kernel_on && [ -n "$DEF" ] || return 1
+    [ -n "$("$IP" -6 route show table "$DEFN" default 2>/dev/null | head -n 1)" ]
+}
+# _gpay_ask PING [-6] - the address ping resolved the name to (its first line)
+_gpay_ask() {
+    if [ -x "$BB" ]; then _go=$("$BB" timeout 5 "$@" -c 1 -w 1 -I "$IFACE" "$GPAY_HOST" 2>/dev/null)
+    else _go=$("$@" -c 1 -w 1 -I "$IFACE" "$GPAY_HOST" 2>/dev/null); fi
+    printf '%s\n' "$_go" | sed -n '1s/^[^(]*(\([^)]*\)).*/\1/p'
+    unset _go
+}
+# gpay_refresh - look the addresses up when it is time (see above); called
+# by the tick while the tunnel is up
+gpay_refresh() {
+    [ "$S_GPAY" = 1 ] && [ -n "$DEF" ] && [ -n "$(gpay_uid)" ] || return 0
+    _gn=$(mono_now); _ga=$(cat "$STATE/gpay_at" 2>/dev/null)
+    if [ "${_ga#* }" = "$DEFN|$NID" ]; then
+        case "${_ga%% *}" in ""|*[!0-9]*) : ;; *) [ $(( _gn - ${_ga%% *} )) -ge "$GPAY_EVERY" ] || { unset _gn _ga; return 0; } ;; esac
+    fi
+    [ "$S_PROFILE" = always ] || screen_on || { unset _gn _ga; return 0; }
+    # noted first: a lookup that hangs or fails is not repeated at every tick
+    echo "$_gn $DEFN|$NID" > "$STATE/gpay_at"
+    _gs=""
+    # shellcheck disable=SC2153 # PING: sh/recover.sh
+    _ga=$(_gpay_ask "$PING"); ipv4_ok "$_ga" && _gs="4 $_ga"
+    if gpay_net6; then
+        if [ -x "$PING6" ]; then _ga=$(_gpay_ask "$PING6"); else _ga=$(_gpay_ask "$PING" -6); fi
+        _ga=$(ipv6_canon "$_ga") && _gs="$_gs${_gs:+
+}6 $_ga"
+    fi
+    _gf="$STATE/gpay"
+    # new ones logged; the seen time of every one found now renewed, the
+    # ones not seen for GPAY_KEEP s dropped, the newest GPAY_MAX per family kept
+    for _ga in $(printf '%s\n' "$_gs" | awk 'NF == 2 { print $1 "_" $2 }'); do
+        grep -q "^${_ga%%_*} ${_ga#*_} " "$_gf" 2>/dev/null || wlog INFO "Google Pay: $GPAY_HOST is ${_ga#*_} - Play services reaches it around the tunnel"
+    done
+    { printf '%s\n' "$_gs" | awk -v n="$_gn" 'NF == 2 { print $1, $2, n }'; cat "$_gf" 2>/dev/null; } |
+        awk -v n="$_gn" -v k="$GPAY_KEEP" -v m="$GPAY_MAX" 'NF == 3 && !s[$1 " " $2]++ && $3 >= n - k { if (++c[$1] <= m) print }' |
+        sort -k1,1 -k3,3nr > "$_gf.tmp.$$" && mv -f "$_gf.tmp.$$" "$_gf"
+    [ ! -e "$_gf.tmp.$$" ] || rm -f "$_gf.tmp.$$"
+    unset _gn _ga _gs _gf
+}
+# gpay_rules CAPTURE - sets GPAY_W: the 5015 rules (rules_want's lines)
+gpay_rules() {
+    GPAY_W=""
+    [ "$1" = 1 ] && [ "$S_GPAY" = 1 ] && [ -n "$DEF" ] && [ -f "$STATE/gpay" ] || return 0
+    _gu=$(gpay_uid); [ -n "$_gu" ] || { unset _gu; return 0; }
+    _g6=0; gpay_net6 && _g6=1
+    GPAY_W=$(awk -v u="$_gu" -v t="$DEFN" -v s="$_g6" '
+        $1 == 4 { print "-4 rule add pref 5015 iif lo uidrange " u "-" u " to " $2 "/32 lookup " t }
+        $1 == 6 && s == 1 { print "-6 rule add pref 5015 iif lo uidrange " u "-" u " to " $2 "/128 lookup " t }' "$STATE/gpay" 2>/dev/null)
+    unset _gu _g6
+}
+
 # rules_want CAPTURE(0|1) - every rule we want, one per line, as arguments
 # for `ip` ("-4 rule add pref ..."). Uses DEF NID LOCALT T_EPIP V6ON EXTRA.
 #   For every captured network (the default one and EXTRA):
 #     5013  its LAN stays local (only for other networks; the default's is 5012)
 #     5014  Android's checks and the login page stay on it
 #     5021 / 5022  everything else bound to it -> tunnel
+#   5015  Play services to Google's payment server (GPAY_W, gpay_rules)
 rules_want() {
     lt=$(local_table)
     for fam in -4 -6; do
@@ -285,6 +385,7 @@ rules_want() {
         echo "-4 rule add pref 5022 iif lo fwmark $_n/0xffff lookup $TABLE"
         echo "-6 rule add pref 5022 iif lo fwmark $_n/0xffff $v6act"
     done
+    [ -z "$GPAY_W" ] || printf '%s\n' "$GPAY_W"
     unset _e _n _t _u _ex
 }
 
@@ -950,7 +1051,8 @@ error_block() {
 # networks, the endpoint, CAPTURE, or the rules themselves by someone else).
 # Returns 2 at shutdown.
 rules_sync() {
-    key="$DEFN|$NID|$LOCALTN|$T_EPIP|$1|$(local_table)|$V6ON|$EXTRA|$(exempt_uids | tr -s ' ' ',')"
+    gpay_rules "$1"
+    key="$DEFN|$NID|$LOCALTN|$T_EPIP|$1|$(local_table)|$V6ON|$EXTRA|$(exempt_uids | tr -s ' ' ',')|$(printf '%s\n' "$GPAY_W" | cksum | cut -d' ' -f1)"
     oldkey=$(cat "$STATE/rules.key" 2>/dev/null)
     sig=$(rules_sig | cksum)
     if [ "$key" != "$oldkey" ] || [ "$sig" != "$(cat "$STATE/rules.sig" 2>/dev/null)" ] || [ -f "$STATE/rules.dirty" ]; then
@@ -1027,6 +1129,7 @@ tunnel_ensure() {
         "$IP" addr add "$T_ADDR" dev "$IFACE" 2>/dev/null
         info_save
         rm -f "$STATE/dns_srv" "$STATE/dns_fo_fail"   # DNS: the first server again
+        rm -f "$STATE/gpay_at"                         # Google Pay: look the addresses up again
         echo "$ck" > "$STATE/loaded"
         mono_now > "$STATE/up_since"
         live_reset   # liveness of the previous tunnel / interface does not count
@@ -1195,6 +1298,7 @@ wgs_tick() {
             ST_TYPE=$T_TYPE
             st_endpoint
             ST_EPHOST=""; [ -n "$T_EPHOST" ] && ST_EPHOST=$T_EP
+            [ "$ST_STATE" = up ] && gpay_refresh
             capture=1
             [ "$S_KILLSWITCH" = 0 ] && [ "$ST_STATE" != up ] && capture=0
             nets_classify; ST_NETS=$NETS_ST
