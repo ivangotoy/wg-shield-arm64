@@ -12,6 +12,10 @@ One phone Back leaves Help.
 * **Release pipeline: a release is named after the code it carries** - the fork's `module.prop` on main holds the last release's version (the release writes it there), and a merge of a newer upstream keeps that line, so a build of upstream 2.9.4 would have been published as `2.9.1-ci<run>`. With an upstream merged into main, the release takes upstream's version (from its `module.prop` at the newest upstream commit in the build) and adds `-ci<run>`; the versionCode is counted on from main's as before
 * **Release pipeline: an upstream release no longer stops the build** - every upstream version bump edits the `version=` / `versionCode=` lines of `module.prop` and `update.json`, which the fork's release commit writes too, so the build's merge with upstream stopped with a conflict to resolve by hand. A conflict only there now keeps main's side (upstream's other changes to `module.prop` are merged), and the release step checks the merge against the same resolution; any other conflict still stops the build
 
+### Fork changes after 2.9.4-ci7
+
+* **Google Pay works with the tunnel on** - adding money or a card with Google Pay failed at once ("Request Failed") while the tunnel was on: Google's payment server refuses Play services' requests that come from a VPN server. Now only Google Play services' connections to that one server (`payments-pa.googleapis.com`) go out on your Wi-Fi or mobile data directly (rule 5015); every other app, and everything else Play services sends, stays in the tunnel. The server's addresses are looked up by themselves through Android's own resolver - when the tunnel comes up, when the network changes and every minute while the tunnel is up (with the Battery profile only while the screen is on) - and every address seen in the last 24 hours is kept, as Google hands out different ones. On by default; turn it off in Settings (*Google Pay around the tunnel*) or with `ctl.sh set gpay 0`. The status key `gpay=` shows the setting
+
 ---
 
 ## 2.9.3

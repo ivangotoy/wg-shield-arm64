@@ -48,6 +48,7 @@ Android sees no VPN - no key icon, no `VpnService`, nothing an app can detect or
 - **Host-name endpoints** - a home server on dynamic DNS works; the name is looked up again if the tunnel stops answering
 - **IPv6 endpoints** - a server address written as `[2001:db8::1]:51820` works on a network that has IPv6
 - **LAN DNS through the tunnel** (opt-in) - while the tunnel is up, lookups sent to a resolver on your Wi-Fi (the router) go to the tunnel's DNS too, so the router does not see them
+- **Google Pay works with the tunnel on** (Settings, on by default; `ctl.sh set gpay 0`) - Google's payment server refuses payments that come from a VPN server, so only Google Play services' connections to that one server (`payments-pa.googleapis.com`) go out on your Wi-Fi or mobile data directly (rule 5015); its addresses are looked up again by themselves through Android's own resolver. Everything else stays in the tunnel
 - **Steps aside for VPN apps** - connect WireGuard, Proton VPN or v2rayNG and WG Shield pauses itself, until that VPN disconnects
 - **Local stays local** - your Wi-Fi LAN (router, printer, SSH from a laptop) and hotspot devices are reached directly
 - **Private keys stay private** - stored root-only, never shown in the WebUI, the log, the status or the report (the same for AmneziaWG's `HeaderProtectionKey`)
@@ -217,6 +218,7 @@ profile=battery|always  checks=5|30|off   autoswitch=0|1    notify=0|1
 dns=tunnel|dnscrypt|network  dns_server=<the tunnel's DNS in use, IPv4 [IPv6]>
 landns=0|1          dns_lan=<interfaces whose DNS goes to the tunnel's DNS too, empty when none>
 ks_error=0|1        (1 and killswitch=1: state=error blocks traffic like state=down)
+gpay=0|1            (1: Play services reaches Google's payment server around the tunnel)
 ```
 
 ---
@@ -241,6 +243,7 @@ su -c '/system/bin/sh /data/adb/modules/wg-shield/ctl.sh set checks 5|30|off'
 su -c '/system/bin/sh /data/adb/modules/wg-shield/ctl.sh set autoswitch 0|1'
 su -c '/system/bin/sh /data/adb/modules/wg-shield/ctl.sh set notify 0|1'
 su -c '/system/bin/sh /data/adb/modules/wg-shield/ctl.sh set landns 0|1'   # LAN DNS through the tunnel
+su -c '/system/bin/sh /data/adb/modules/wg-shield/ctl.sh set gpay 0|1'   # Google Pay around the tunnel (on by default)
 su -c '/system/bin/sh /data/adb/modules/wg-shield/ctl.sh notifytest'   # how the notification looks
 su -c '/system/bin/sh /data/adb/modules/wg-shield/ctl.sh restart'   # watchdog + tunnel again
 su -c '/system/bin/sh /data/adb/modules/wg-shield/ctl.sh remove <name>'
