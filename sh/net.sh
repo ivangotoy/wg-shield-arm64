@@ -290,7 +290,9 @@ gpay_net6() {
     v6_kernel_on && [ -n "$DEF" ] || return 1
     [ -n "$("$IP" -6 route show table "$DEFN" default 2>/dev/null | head -n 1)" ]
 }
-# _gpay_ask PING [-6] - the address ping resolved the name to (its first line)
+# _gpay_ask PING [OPTIONS] - the address ping resolved the name to (its
+# first line). IPv6 with -n: ping6 names the address there by its reverse
+# DNS name otherwise
 _gpay_ask() {
     if [ -x "$BB" ]; then _go=$("$BB" timeout 5 "$@" -c 1 -w 1 -I "$IFACE" "$GPAY_HOST" 2>/dev/null)
     else _go=$("$@" -c 1 -w 1 -I "$IFACE" "$GPAY_HOST" 2>/dev/null); fi
@@ -312,7 +314,7 @@ gpay_refresh() {
     # shellcheck disable=SC2153 # PING: sh/recover.sh
     _ga=$(_gpay_ask "$PING"); ipv4_ok "$_ga" && _gs="4 $_ga"
     if gpay_net6; then
-        if [ -x "$PING6" ]; then _ga=$(_gpay_ask "$PING6"); else _ga=$(_gpay_ask "$PING" -6); fi
+        if [ -x "$PING6" ]; then _ga=$(_gpay_ask "$PING6" -n); else _ga=$(_gpay_ask "$PING" -6 -n); fi
         _ga=$(ipv6_canon "$_ga") && _gs="$_gs${_gs:+
 }6 $_ga"
     fi

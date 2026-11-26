@@ -1800,7 +1800,9 @@ for a; do :; done
 [ "\$a" = payments-pa.googleapis.com ] || exit 1
 echo "6 \$*" >> "$RUN/gp.calls"
 [ -s "$RUN/gp6" ] || exit 2
-echo "PING \$a(\$(cat "$RUN/gp6")) from fd00::2 wgs0: 56 data bytes"
+# without -n the header names the address by its reverse DNS name
+case " \$* " in *" -n "*) n=\$(cat "$RUN/gp6") ;; *) n=rdns.example ;; esac
+echo "PING \$a(\$n) from fd00::2 wgs0: 56 data bytes"
 exit 1
 EOF
     cat > "$FAKES/getprop-s" <<EOF
