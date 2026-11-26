@@ -1968,6 +1968,31 @@ EOF
     WGS_PING="$FAKES/gpingo" ctl up wg-GP-1 >/dev/null
     check "old ping that refuses -4: asked again without it, its rule" "2 -4 plain 1 wlan0" "$(calls 4) $(sed -n 1p "$RUN/gp.calls" | cut -d' ' -f2) $(sed -n 2p "$RUN/gp.calls" | grep -q ' -4 ' && echo -4 || echo plain) $(r15) $(gms 192.0.2.10)"
     ctl down >/dev/null
+    # the tunnel carries IPv6, the Wi-Fi has none: Play services' IPv6 to the
+    # server would go through the tunnel - unreachable, so it takes IPv4
+    echo 0 > "$WGS_PROC6/all/disable_ipv6"; mkdir -p "$WGS_PROC6/wgs0"; echo 0 > "$WGS_PROC6/wgs0/disable_ipv6"
+    conf "$WGS_DL/wg-GP-6.conf" 203.0.113.102:51820
+    sed -i 's#^Address = .*#Address = 10.2.0.2/32, fd00::2/128#; s#^AllowedIPs = .*#AllowedIPs = 0.0.0.0/0, ::/0#' "$WGS_DL/wg-GP-6.conf"
+    ctl import wg-GP-6.conf >/dev/null
+    rm -f "$STATE/gpay" "$STATE/gpay_at"; : > "$RUN/gp.calls"; echo 192.0.2.10 > "$RUN/gp4"
+    date +%s > "$STATE/fake_hs"; ctl up wg-GP-6 >/dev/null
+    u6() { ip -6 rule | grep -c '^5015:.* to 2001:db8::10 .*unreachable'; }
+    check "tunnel with IPv6, network without: IPv6 looked up, Play services' IPv6 to it unreachable, IPv4 around" "up tunnel 1 1 1 blocked wgs0 wgs0 1 wlan0" "$(st state) $(st ipv6) $(calls 6) $(r15v6) $(u6) $(via -6 route get 2001:db8::10 uid 10123) $(via -6 route get 2001:db8::10 uid 10200) $(via -6 route get 2001:db8::99 uid 10123) $(r15) $(gms 192.0.2.10)"
+    # the Wi-Fi gets IPv6: the normal rule, without a new lookup
+    ip -6 addr add fd11::50/64 dev wlan0 nodad 2>/dev/null
+    ip -6 route add default via fd11::1 dev wlan0 table 1028 2>/dev/null
+    ctl status >/dev/null
+    check "network gets IPv6: around the tunnel instead of unreachable, no new lookup" "1 1 0 1 wlan0" "$(calls 6) $(r15v6) $(u6) $(ip -6 rule | grep -c '^5015:.* to 2001:db8::10 .*lookup 1028') $(via -6 route get 2001:db8::10 uid 10123)"
+    ip -6 route del default via fd11::1 dev wlan0 table 1028 2>/dev/null
+    ctl status >/dev/null
+    check "network loses IPv6: unreachable again" "1 1 blocked" "$(r15v6) $(u6) $(via -6 route get 2001:db8::10 uid 10123)"
+    b="$(r15v6) $(u6)"; ctl set gpay 0 >/dev/null
+    check "set gpay 0: no IPv6 rule, Play services' IPv6 through the tunnel" "1 1 0 wgs0" "$b $(r15v6) $(via -6 route get 2001:db8::10 uid 10123)"
+    ctl set gpay 1 >/dev/null
+    b=$(u6); ctl down >/dev/null
+    check "off: no IPv6 rule" "1 0" "$b $(r15v6)"
+    ip -6 addr del fd11::50/64 dev wlan0 2>/dev/null
+    echo 1 > "$WGS_PROC6/all/disable_ipv6"
     export WGS_PM="$FAKES/pm" WGS_PING="$FAKES/ping" WGS_GETPROP="$FAKES/getprop"
     unset WGS_PING6 WGS_GPAY_KEEP
     else

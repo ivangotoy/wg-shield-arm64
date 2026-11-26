@@ -9,6 +9,7 @@
 #   5013  iif lo fwmark <other>/0xffff lookup <its table> suppress_prefixlength 0   its LAN stays local
 #   5014  iif lo fwmark <net>/0xffff uidrange <uid>-<uid> lookup <its table>      Android's own check of it, login page
 #   5015  iif lo uidrange <Play services> to <address> lookup <default net table>  Google Pay's payment server (gpay_*)
+#         (IPv6 while the tunnel carries IPv6 and the network has none: unreachable - Play services takes IPv4)
 #   5020  iif lo fwmark 0x0/0x10000        lookup 51820                  all traffic not bound to a network
 #   5021  iif lo fwmark <netId>/0xffff     lookup 51820                  traffic bound to the default network
 #   5022  iif lo fwmark <other>/0xffff     lookup 51820                  traffic bound to another internet network
@@ -259,8 +260,16 @@ exempt_uids() {
 # every GPAY_EVERY s - with the Battery profile only while the screen is on
 # (nothing is pinged with the screen off). Google answers with other
 # addresses over time: every address seen in the last GPAY_KEEP s stays, at
-# most GPAY_MAX per family (the newest). IPv6 only when the default network
-# has IPv6 (ping6, or ping -6 where there is no ping6).
+# most GPAY_MAX per family (the newest). IPv6 (ping6, or ping -6 where
+# there is no ping6) when the default network has IPv6 - then the same rule
+# in the IPv6 rules - or when the tunnel carries IPv6 and the network has
+# none: Play services would reach the server over IPv6 through the tunnel
+# and be refused, and there is no way around it, so its IPv6 to those
+# addresses is unreachable instead (5015 ... unreachable, as IPv6 that may
+# not go anywhere else is): it takes IPv4 at once, which has its rule.
+# Nothing else is sent around the tunnel; the rule goes when the network
+# gets IPv6 (then the normal one), when the tunnel stops carrying IPv6, and
+# with the setting off.
 # $STATE/gpay: "<4|6> <address> <seen, s since boot>"; $STATE/gpay_at: when,
 # and for which network, the last lookup ran; $STATE/gpay_uid: Play
 # services' uid (empty: not installed), looked up once like exempt_uids.
@@ -316,7 +325,7 @@ gpay_refresh() {
     # address first; an old IPv4-only ping refuses -4 - then without it
     _ga=$(_gpay_ask "$PING" -4); ipv4_ok "$_ga" || _ga=$(_gpay_ask "$PING")
     ipv4_ok "$_ga" && _gs="4 $_ga"
-    if gpay_net6; then
+    if gpay_net6 || [ "$V6ON" = 1 ]; then
         if [ -x "$PING6" ]; then _ga=$(_gpay_ask "$PING6" -n); else _ga=$(_gpay_ask "$PING" -6 -n); fi
         _ga=$(ipv6_canon "$_ga") && _gs="$_gs${_gs:+
 }6 $_ga"
@@ -338,10 +347,12 @@ gpay_rules() {
     GPAY_W=""
     [ "$1" = 1 ] && [ "$S_GPAY" = 1 ] && [ -n "$DEF" ] && [ -f "$STATE/gpay" ] || return 0
     _gu=$(gpay_uid); [ -n "$_gu" ] || { unset _gu; return 0; }
-    _g6=0; gpay_net6 && _g6=1
+    # IPv6: 1 around the tunnel, 2 unreachable (see above), 0 none
+    _g6=0; if gpay_net6; then _g6=1; elif [ "$V6ON" = 1 ]; then _g6=2; fi
     GPAY_W=$(awk -v u="$_gu" -v t="$DEFN" -v s="$_g6" '
         $1 == 4 { print "-4 rule add pref 5015 iif lo uidrange " u "-" u " to " $2 "/32 lookup " t }
-        $1 == 6 && s == 1 { print "-6 rule add pref 5015 iif lo uidrange " u "-" u " to " $2 "/128 lookup " t }' "$STATE/gpay" 2>/dev/null)
+        $1 == 6 && s == 1 { print "-6 rule add pref 5015 iif lo uidrange " u "-" u " to " $2 "/128 lookup " t }
+        $1 == 6 && s == 2 { print "-6 rule add pref 5015 iif lo uidrange " u "-" u " to " $2 "/128 unreachable" }' "$STATE/gpay" 2>/dev/null)
     unset _gu _g6
 }
 
