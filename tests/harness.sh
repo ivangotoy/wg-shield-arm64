@@ -2812,6 +2812,20 @@ if want speedmerge; then
     reset_state
 fi
 
+if want speedbusy; then
+    echo "speedbusy: a host name not looked up because the watchdog's lock stayed busy is logged"
+    reset_state
+    conf "$WGS_DL/wg-SB-1.conf" vpn.example.com:51820
+    ctl import wg-SB-1.conf >/dev/null
+    sleep 60 & holder=$!
+    mkdir "$STATE/lock" && echo "$holder" > "$STATE/lock/pid"
+    # ctl test with its 1 s waits skipped (lock_get waits 20 x 1 s)
+    out=$($TSH -c "sleep() { :; }; . \"\$WGS_MODDIR/ctl.sh\"" ctl test SB 2>&1)
+    kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null; rm -rf "$STATE/lock"
+    check "shown as not found, the skipped lookup logged" "1 1" "$(echo "$out" | grep -c '^r=host:vpn.example.com|.*|wg-SB-1|no_address') $(grep -c 'WARN.*speed test: wg-SB-1 - the watchdog stayed busy for 20 s, vpn.example.com not looked up' "$WGS_DATA/logs/wg-shield.log")"
+    reset_state
+fi
+
 if want last_line; then
     echo "last_line: settings, favorites and a backup's favorites without a final line break keep their last line"
     reset_state
