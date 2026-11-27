@@ -377,7 +377,7 @@
         <label class="sw" id="sw-ld"><input type="checkbox" id="cb-ld" onchange="setOpt(this, 'landns', 'LAN DNS through the tunnel')"><i></i></label>
       </div>
       <div class="row">
-        <div class="rn"><b>Google Pay around the tunnel</b><span>On (default): Google Pay works while the tunnel is on. Google's payment server refuses payments that come from the tunnel's server, so only Google Play services' connections to that one server go out on your Wi-Fi or mobile data directly; the server's addresses are looked up again by themselves. Everything else stays in the tunnel. Off: Play services goes through the tunnel too, and adding a card or money with Google Pay can fail.</span></div>
+        <div class="rn"><b>Google Pay around the tunnel</b><span>On (default): Google Pay works while the tunnel is on. Google's payment server refuses payments that come from the tunnel's server, so Google Play services' connections to that server's addresses go out on your Wi-Fi or mobile data directly - by address, so another Google service of Play services on one of them goes the same way - also while the kill switch blocks. The addresses are looked up by themselves with one ping through the tunnel once a minute (with the Battery profile only while the screen is on), also with Check every: Off. Other apps stay in the tunnel. Off: Play services goes through the tunnel too, and adding a card or money with Google Pay can fail.</span></div>
         <label class="sw" id="sw-gp"><input type="checkbox" id="cb-gp" onchange="setOpt(this, 'gpay', 'Google Pay around the tunnel')"><i></i></label>
       </div>
       <div class="row col">
@@ -963,7 +963,7 @@ function renderSettings(st) {
   if (document.activeElement !== $('chk-sel')) $('chk-sel').value = chk;
   $('chk-note').textContent = CHECKS_NOTE[chk];
   $('prof-seg').classList.toggle('off', chk === 'off');
-  $('prof-note').textContent = chk === 'off' ? 'Nothing is pinged (Check every: Off), so there is nothing to pause with the screen off.' : PROFILE_NOTE[prof].replace('{N}', chk);
+  $('prof-note').textContent = chk === 'off' ? 'Nothing is pinged to check the tunnel (Check every: Off). Only the Google Pay lookup, when it is on, still follows this profile.' : PROFILE_NOTE[prof].replace('{N}', chk);
   const paused = st.state === 'paused' && st.reason === 'user';
   $('resume-row').classList.toggle('hidden', !paused);
   $('pause-note').textContent = paused ? fmtDur(st.pause_left) + ' left' : (st.active ? '' : 'tunnel is off');
@@ -1140,7 +1140,7 @@ const PROFILE_NOTE = {
 const CHECKS_NOTE = {
   '5': 'A ping through the tunnel every 5 s (720 an hour, about 200 KB). A dead tunnel is found in about 10 seconds.',
   '30': 'A ping through the tunnel every 30 s (120 an hour, about 35 KB). A dead tunnel is found in about 40 seconds. Default.',
-  off: 'No pings at all. Only WireGuard itself watches the tunnel: a dead one is found within 3 minutes. The self-healing and the notification still work, just later.',
+  off: 'No pings at all to check the tunnel (Google Pay around the tunnel still pings once a minute to look its server up). Only WireGuard itself watches the tunnel: a dead one is found within 3 minutes. The self-healing and the notification still work, just later.',
 };
 async function setChecks(sel) {
   const v = sel.value; sel.disabled = true;
