@@ -2798,6 +2798,10 @@ if want speedmerge; then
     echo "203.0.113.141|5|30|ok|$(date +%s)|wg-SM-1,wg-SM-2" > "$WGS_DATA/speedtest"
     out=$(WGS_TEST_HS_MAX=2 ctl test favorites 2>&1)
     check "test of a box with one of an address's tunnels: the new result names the other one too" "1 wg-SM-1,wg-SM-2" "$(echo "$out" | grep -c '^r=203.0.113.141|.*|wg-SM-1|') $(grep '^203.0.113.141|' "$WGS_DATA/speedtest" | cut -d'|' -f6)"
+    # a results file edited by hand, without a final line break: merged as well
+    printf '%s' "203.0.113.141|5|30|ok|$(date +%s)|wg-SM-1,wg-SM-2" > "$WGS_DATA/speedtest"
+    WGS_TEST_HS_MAX=2 ctl test favorites >/dev/null 2>&1
+    check "results file without a final line break: the new result saved, the other tunnel kept" "1 wg-SM-1,wg-SM-2" "$(grep -c . "$WGS_DATA/speedtest") $(grep '^203.0.113.141|' "$WGS_DATA/speedtest" | cut -d'|' -f6)"
     reset_state
 fi
 

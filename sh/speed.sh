@@ -233,7 +233,8 @@ test_run() {
     _ssaved=0
     _snew=$(printf '%s' "$_sres" | cut -d'|' -f1)
     _stun=$(printf '%s' "$_spairs" | awk 'NF { print $2 }')
-    { [ -f "$TEST_FILE" ] && cat "$TEST_FILE"; echo "--new--"; printf '%s' "$_sres"; } |
+    # (an empty line first: a file edited by hand may end without a line break)
+    { [ -f "$TEST_FILE" ] && cat "$TEST_FILE"; echo; echo "--new--"; printf '%s' "$_sres"; } |
         awk -F'|' -v A="$(echo $_snew)" -v T="$(echo $_stun)" '
             BEGIN { OFS = "|"; n = split(A, a, " "); for (i = 1; i <= n; i++) da[a[i]] = 1
                     n = split(T, t, " "); for (i = 1; i <= n; i++) dt[t[i]] = 1 }
