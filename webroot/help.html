@@ -204,7 +204,7 @@
   <h3>Tunnel</h3>
   <p>The active tunnel, its type (WireGuard or AmneziaWG, with the kernel's AmneziaWG version), its server, the last handshake, data received and sent, and which network carries the tunnel. <strong>Other networks</strong>: the networks that are up besides that one - internet ones go through the tunnel (also while Android is still checking them), carrier service networks stay outside. <strong>Self-healing</strong>: ready, or the step it is on right now (see 7).</p>
   <h3>Networking set</h3>
-  <p>Whether DNSCrypt Proxy, ipset and VPN Hotspot are installed and what they are doing (see 8).</p>
+  <p>Whether DNSCrypt Proxy, ipset, VPN Hotspot and LAN Cloak are installed and what they are doing (see 8).</p>
 </div>
 
 <div class="sec-title" id="tunnels">6 · tunnels, countries, favorites, speed test, backup, import, amneziawg</div>
@@ -366,7 +366,7 @@
   <h3>No internet</h3>
   <p>State <span class="pill bad">down</span>? The server does not answer, the restarts (and auto-switch, if on) did not help, and the kill switch holds. Switch to another tunnel, or pause. Stays <span class="pill warn">connecting</span>? Check the server is not blocked by ipset (see 8), then send the <strong>Report</strong>.</p>
   <h3>Something looks stuck</h3>
-  <p>The Dashboard does not change, the watchdog shows <em>stopped</em>, or the tunnel does not come back after the network returned: Settings → Maintenance → <strong>Restart WG Shield</strong> (tap twice). It stops the watchdog, builds the tunnel again with a new connection to the server and starts the watchdog again, in a few seconds and without a reboot. Your tunnel, settings, a pause or "off" stay as they are; the kill switch keeps blocking while it restarts. If it does not help, send the <strong>Report</strong>.</p>
+  <p>The Dashboard does not change, the watchdog's <em>Running</em> shows <em>NO</em>, or the tunnel does not come back after the network returned: Settings → Maintenance → <strong>Restart WG Shield</strong> (tap twice). It stops the watchdog, builds the tunnel again with a new connection to the server and starts the watchdog again, in a few seconds and without a reboot. Your tunnel, settings, a pause or "off" stay as they are; the kill switch keeps blocking while it restarts. If it does not help, send the <strong>Report</strong>.</p>
   <h3>Paused and I did not pause it</h3>
   <p>A VPN app is connected - the banner names it. Disconnect it.</p>
   <h3>Import skipped a tunnel</h3>
