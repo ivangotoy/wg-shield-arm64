@@ -278,6 +278,7 @@ GPAY_PKG=com.google.android.gms
 GPAY_EVERY=${WGS_GPAY_EVERY:-60}
 GPAY_KEEP=${WGS_GPAY_KEEP:-86400}
 GPAY_MAX=32
+GPAY_WAIT=${WGS_GPAY_WAIT:-6}     # s for the lookups of one round (_gpay_ask)
 PING6="${WGS_PING6:-/system/bin/ping6}"
 gpay_uid() {
     _f="$STATE/gpay_uid"
@@ -299,14 +300,29 @@ gpay_net6() {
     v6_kernel_on && [ -n "$DEF" ] || return 1
     [ -n "$("$IP" -6 route show table "$DEFN" default 2>/dev/null | head -n 1)" ]
 }
-# _gpay_ask PING [OPTIONS] - the address ping resolved the name to (its
-# first line). IPv6 with -n: ping6 names the address there by its reverse
-# DNS name otherwise
+# _gpay_ask PING [OPTIONS] - sets _gr: the address ping resolved the name to
+# (its first line), empty when none. IPv6 with -n: ping6 names the address
+# there by its reverse DNS name otherwise.
+# The lookups of one round share one deadline, _gd (1/100 s since boot, set
+# by gpay_refresh), as they run under the lock (ctl waits 20 s for it):
+# ping's -w bounds the echo, not the name lookup. The bound needs no tool
+# (a busybox without its timeout applet, or none, bounded nothing): ping
+# runs in the background into a file and is stopped at the deadline - then
+# _gto=1 and the round's other lookups are not made.
 _gpay_ask() {
-    if [ -x "$BB" ]; then _go=$("$BB" timeout 5 "$@" -c 1 -w 1 -I "$IFACE" "$GPAY_HOST" 2>/dev/null)
-    else _go=$("$@" -c 1 -w 1 -I "$IFACE" "$GPAY_HOST" 2>/dev/null); fi
-    printf '%s\n' "$_go" | sed -n '1s/^[^(]*(\([^)]*\)).*/\1/p'
-    unset _go
+    _gr=""
+    [ "$_gto" = 0 ] || return 0
+    _go="$STATE/gpay.out.tmp.$$"
+    "$@" -c 1 -w 1 -I "$IFACE" "$GPAY_HOST" > "$_go" 2>/dev/null &
+    _gp=$!
+    while kill -0 "$_gp" 2>/dev/null; do
+        [ "$(mono_cs)" -lt "$_gd" ] || { kill "$_gp" 2>/dev/null; _gto=1; break; }
+        sleep 0.1 2>/dev/null || sleep 1
+    done
+    wait "$_gp" 2>/dev/null
+    _gr=$(sed -n '1s/^[^(]*(\([^)]*\)).*/\1/p' "$_go" 2>/dev/null)
+    rm -f "$_go"
+    unset _go _gp
 }
 # gpay_refresh - look the addresses up when it is time (see above); called
 # by the tick while the tunnel is up
@@ -319,15 +335,16 @@ gpay_refresh() {
     [ "$S_PROFILE" = always ] || screen_on || { unset _gn _ga; return 0; }
     # noted first: a lookup that hangs or fails is not repeated at every tick
     echo "$_gn $DEFN|$NID" > "$STATE/gpay_at"
-    _gs=""
-    # shellcheck disable=SC2153 # PING: sh/recover.sh
+    _gs=""; _gto=0; _gd=$(( $(mono_cs) + GPAY_WAIT * 100 ))
     # IPv4 asked for: a ping that resolves both families may name an IPv6
     # address first; an old IPv4-only ping refuses -4 - then without it
-    _ga=$(_gpay_ask "$PING" -4); ipv4_ok "$_ga" || _ga=$(_gpay_ask "$PING")
+    # shellcheck disable=SC2153 # PING: sh/recover.sh
+    _gpay_ask "$PING" -4; _ga=$_gr
+    ipv4_ok "$_ga" || { _gpay_ask "$PING"; _ga=$_gr; }
     ipv4_ok "$_ga" && _gs="4 $_ga"
     if gpay_net6 || [ "$V6ON" = 1 ]; then
-        if [ -x "$PING6" ]; then _ga=$(_gpay_ask "$PING6" -n); else _ga=$(_gpay_ask "$PING" -6 -n); fi
-        _ga=$(ipv6_canon "$_ga") && _gs="$_gs${_gs:+
+        if [ -x "$PING6" ]; then _gpay_ask "$PING6" -n; else _gpay_ask "$PING" -6 -n; fi
+        _ga=$(ipv6_canon "$_gr") && _gs="$_gs${_gs:+
 }6 $_ga"
     fi
     _gf="$STATE/gpay"
@@ -340,7 +357,7 @@ gpay_refresh() {
         awk -v n="$_gn" -v k="$GPAY_KEEP" -v m="$GPAY_MAX" 'NF == 3 && !s[$1 " " $2]++ && $3 >= n - k { if (++c[$1] <= m) print }' |
         sort -k1,1 -k3,3nr > "$_gf.tmp.$$" && mv -f "$_gf.tmp.$$" "$_gf"
     [ ! -e "$_gf.tmp.$$" ] || rm -f "$_gf.tmp.$$"
-    unset _gn _ga _gs _gf
+    unset _gn _ga _gs _gf _gr _gd _gto
 }
 # gpay_rules CAPTURE - sets GPAY_W: the 5015 rules (rules_want's lines)
 gpay_rules() {

@@ -1968,6 +1968,33 @@ EOF
     WGS_PING="$FAKES/gpingo" ctl up wg-GP-1 >/dev/null
     check "old ping that refuses -4: asked again without it, its rule" "2 -4 plain 1 wlan0" "$(calls 4) $(sed -n 1p "$RUN/gp.calls" | cut -d' ' -f2) $(sed -n 2p "$RUN/gp.calls" | grep -q ' -4 ' && echo -4 || echo plain) $(r15) $(gms 192.0.2.10)"
     ctl down >/dev/null
+    # a busybox without the timeout applet: the lookup is bounded without it
+    cat > "$FAKES/bb-notimeout" <<'EOF'
+#!/bin/sh
+case "$1" in --list) printf '%s\n' sh unzip ;; *) echo "$1: applet not found" >&2; exit 127 ;; esac
+EOF
+    chmod 755 "$FAKES/bb-notimeout"
+    rm -f "$STATE/gpay" "$STATE/gpay_at"; : > "$RUN/gp.calls"
+    WGS_BB="$FAKES/bb-notimeout" ctl up wg-GP-1 >/dev/null
+    check "busybox without the timeout applet: the address still looked up, its rule" "1 1 wlan0" "$(calls 4) $(r15) $(gms 192.0.2.10)"
+    ctl down >/dev/null
+    # a lookup that hangs (the tunnel's DNS does not answer, then "unknown
+    # host"): stopped at the round's deadline (1 s here), the round's other
+    # lookups (the retry without -4) not made - the tick holds the lock
+    cat > "$FAKES/gpings" <<EOF
+#!/bin/sh
+for a; do :; done
+echo "4 \$*" >> "$RUN/gp.calls"
+sleep 10
+echo end >> "$RUN/gp.end"
+echo "ping: unknown host \$a" >&2
+exit 2
+EOF
+    chmod 755 "$FAKES/gpings"
+    rm -f "$STATE/gpay" "$STATE/gpay_at" "$RUN/gp.end"; : > "$RUN/gp.calls"
+    WGS_PING="$FAKES/gpings" WGS_GPAY_WAIT=1 ctl up wg-GP-1 >/dev/null 2>"$RUN/gp.err"
+    check "lookup that hangs: stopped at the deadline, no other lookup in that round, nothing on stderr, no output file left" "1 0 0 0" "$(calls 4) $(cat "$RUN/gp.end" 2>/dev/null | grep -c .) $(grep -c . "$RUN/gp.err") $(find "$STATE" -maxdepth 1 -name 'gpay.out.*' | grep -c .)"
+    ctl down >/dev/null
     # the tunnel carries IPv6, the Wi-Fi has none: Play services' IPv6 to the
     # server would go through the tunnel - unreachable, so it takes IPv4
     echo 0 > "$WGS_PROC6/all/disable_ipv6"; mkdir -p "$WGS_PROC6/wgs0"; echo 0 > "$WGS_PROC6/wgs0/disable_ipv6"

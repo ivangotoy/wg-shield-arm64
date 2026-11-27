@@ -16,6 +16,10 @@ One phone Back leaves Help.
 
 * **Google Pay works with the tunnel on** - adding money or a card with Google Pay failed at once ("Request Failed") while the tunnel was on: Google's payment server refuses Play services' requests that come from a VPN server. Now only Google Play services' connections to that one server (`payments-pa.googleapis.com`) go out on your Wi-Fi or mobile data directly (rule 5015); every other app, and everything else Play services sends, stays in the tunnel. The server's addresses are looked up by themselves through Android's own resolver - when the tunnel comes up, when the network changes and every minute while the tunnel is up (with the Battery profile only while the screen is on) - and every address seen in the last 24 hours is kept, as Google hands out different ones. On by default; turn it off in Settings (*Google Pay around the tunnel*) or with `ctl.sh set gpay 0`. The status key `gpay=` shows the setting
 
+### Fork fixes after 2.9.4-ci8
+
+* **Google Pay: the address lookup no longer depends on busybox's `timeout`, and cannot hold the module up** - the lookup was bounded with the root manager's busybox `timeout`; a busybox without that applet made every lookup fail, so no address was ever learnt, and without busybox nothing bounded it. A lookup whose DNS answer does not come runs while the watchdog holds its lock, so `ctl.sh` commands and the WebUI waited for it (up to 15 s, or unbounded). Now the lookups of one round share a deadline of 6 s that needs no tool: a lookup still running then is stopped and the round ends (the kept addresses stay); the next round follows a minute later as before
+
 ---
 
 ## 2.9.3
