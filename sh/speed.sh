@@ -195,7 +195,11 @@ test_run() {
         _sa=$T_EPIP
         if [ -n "$T_EPHOST" ]; then
             # rule 5001 is one of ours (50xx): only under the watchdog's lock
-            if lock_get 20; then _sa=$(resolve_host "$T_EPHOST") || _sa="host:$T_EPHOST"; lock_release; else _sa="host:$T_EPHOST"; fi
+            if lock_get 20; then _sa=$(resolve_host "$T_EPHOST") || _sa="host:$T_EPHOST"; lock_release
+            else
+                _sa="host:$T_EPHOST"
+                wlog WARN "speed test: $_stn - the watchdog stayed busy for 20 s, $T_EPHOST not looked up (shown as not found)"
+            fi
         fi
         [ -n "$_sa" ] || _sa="host:${T_EP%:*}"
         _spairs="$_spairs$_sa $_stn
