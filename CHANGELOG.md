@@ -22,6 +22,7 @@ One phone Back leaves Help.
 * **Google Pay: Play services installed after the first look is found** - the package manager was asked once for Play services' uid, and "not installed" stayed until the next reboot, so Play services installed later got no rule 5015. Now "not installed" is asked again every 10 minutes
 * **Release pipeline: no guessed merge of `module.prop` after criss-cross merges** - when main and upstream had merged each other, they have more than one merge base; keeping main's version lines in a `module.prop` conflict then merged the file against whichever base git named first, which depends on commit times, and an upstream change to another line of the file could be lost without a word. Such a conflict now stops the build with the reason in the log (resolve by hand, as for any other conflict)
 * **Release pipeline: a runner git older than 2.38 is named as the cause** - the merge check needs `git merge-tree --write-tree` (git 2.38); an older git refused it, and the build reported a merge conflict to resolve by hand, the release step "merge tree differs" (also for an upstream merge without any conflict). The log now says that git 2.38 or newer is needed
+* **Speed test: a server's result counts for all its tunnels** - testing a box that holds only some of the tunnels on one server address (Favorites, for example) dropped the other tunnels of that address from the saved results, so the auto-switch ranked them as never tested. The new result now names them too
 
 ---
 

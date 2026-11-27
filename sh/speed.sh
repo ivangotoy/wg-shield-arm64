@@ -226,21 +226,27 @@ test_run() {
         echo "r=$_sa|$R_HS|$R_PING|$_slist|$R_ST"
         wlog INFO "speed test: $_sa ($_slist) - $R_ST${R_PING:+, ping $R_PING ms}${R_HS:+, handshake $R_HS ms}"
     done
-    # merge: this run replaces the lines of its addresses and of its tunnels
+    # merge: this run replaces the lines of its addresses and of its tunnels.
+    # The other names of an old line of an address measured now (tunnels of
+    # another box on the same server) go onto the new line: one result
+    # counts for every tunnel of an address (test_rank)
     _ssaved=0
     _snew=$(printf '%s' "$_sres" | cut -d'|' -f1)
     _stun=$(printf '%s' "$_spairs" | awk 'NF { print $2 }')
-    {
-        [ -f "$TEST_FILE" ] && awk -F'|' -v A="$(echo $_snew)" -v T="$(echo $_stun)" '
+    { [ -f "$TEST_FILE" ] && cat "$TEST_FILE"; echo "--new--"; printf '%s' "$_sres"; } |
+        awk -F'|' -v A="$(echo $_snew)" -v T="$(echo $_stun)" '
             BEGIN { OFS = "|"; n = split(A, a, " "); for (i = 1; i <= n; i++) da[a[i]] = 1
                     n = split(T, t, " "); for (i = 1; i <= n; i++) dt[t[i]] = 1 }
-            NF >= 6 && !($1 in da) {
+            $0 == "--new--" { nw = 1; next }
+            !nw && NF >= 6 {
                 m = split($6, x, ","); keep = ""
                 for (i = 1; i <= m; i++) if (!(x[i] in dt)) keep = keep (keep == "" ? "" : ",") x[i]
-                if (keep != "") { $6 = keep; print }
-            }' "$TEST_FILE"
-        printf '%s' "$_sres"
-    } > "$TEST_FILE.tmp.$$" && chmod 600 "$TEST_FILE.tmp.$$" && mv -f "$TEST_FILE.tmp.$$" "$TEST_FILE" && _ssaved=1
+                if (keep == "") next
+                if ($1 in da) { ex[$1] = ex[$1] "," keep; next }
+                $6 = keep; print; next
+            }
+            nw && NF >= 6 { if ($1 in ex) $6 = $6 ex[$1]; print }' > "$TEST_FILE.tmp.$$" &&
+        chmod 600 "$TEST_FILE.tmp.$$" && mv -f "$TEST_FILE.tmp.$$" "$TEST_FILE" && _ssaved=1
     [ "$_ssaved" = 1 ] || { rm -f "$TEST_FILE.tmp.$$"; wlog WARN "speed test: the results could not be saved"; }
     echo "ok=1"; echo "box=$_sbox"; echo "epoch=$_snow"; echo "addresses=$_stot"; echo "tunnels=$_scnt"
     unset _sbox _sst _saa _sak _spairs _scnt _sa _sas _stot _snow _si _sres _snames _slist _spick _snew _stun _stn _ssaved

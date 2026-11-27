@@ -2789,6 +2789,18 @@ EOF
     rm -rf "$RUN/mvfail" "$WGS_SYSNET/wgs0"
 fi
 
+if want speedmerge; then
+    echo "speedmerge: speed test results of an address keep its other tunnels; the test lock"
+    reset_state
+    conf "$WGS_DL/wg-SM-1.conf" 203.0.113.141:51820; conf "$WGS_DL/wg-SM-2.conf" 203.0.113.141:51820
+    ctl import wg-SM-1.conf >/dev/null; ctl import wg-SM-2.conf >/dev/null; ctl fav add wg-SM-1 >/dev/null
+    # an earlier test of the SM box: both tunnels on the one address
+    echo "203.0.113.141|5|30|ok|$(date +%s)|wg-SM-1,wg-SM-2" > "$WGS_DATA/speedtest"
+    out=$(WGS_TEST_HS_MAX=2 ctl test favorites 2>&1)
+    check "test of a box with one of an address's tunnels: the new result names the other one too" "1 wg-SM-1,wg-SM-2" "$(echo "$out" | grep -c '^r=203.0.113.141|.*|wg-SM-1|') $(grep '^203.0.113.141|' "$WGS_DATA/speedtest" | cut -d'|' -f6)"
+    reset_state
+fi
+
 if want last_line; then
     echo "last_line: settings, favorites and a backup's favorites without a final line break keep their last line"
     reset_state
