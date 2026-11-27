@@ -1929,6 +1929,19 @@ EOF
     export WGS_PM="$FAKES/pm-nogms"
     ctl import wg-GP-1.conf >/dev/null; date +%s > "$STATE/fake_hs"; ctl up wg-GP-1 >/dev/null
     check "no Play services uid: no lookup, no rule, said once in the log" "up 0 0 1" "$(st state) $(calls 4) $(r15) $(logn 'Play services is not installed')"
+    # installed later: "not installed" is asked again after the interval
+    # (the file's age), not at every tick; a package manager without an
+    # answer then is not asked again at the next tick either
+    printf '#!/bin/sh\necho x >> "%s"\n' "$RUN/pm.calls" > "$FAKES/pm-silent"
+    printf '#!/bin/sh\necho x >> "%s"\nexec "%s"\n' "$RUN/pm.calls" "$FAKES/pm-gms" > "$FAKES/pm-gmsc"
+    chmod 755 "$FAKES/pm-silent" "$FAKES/pm-gmsc"
+    : > "$RUN/pm.calls"; export WGS_PM="$FAKES/pm-gmsc"; ctl status >/dev/null
+    b="$(grep -c . "$RUN/pm.calls") $(r15)"
+    touch -d @1 "$STATE/gpay_uid"; export WGS_PM="$FAKES/pm-silent"; ctl status >/dev/null; ctl status >/dev/null
+    b="$b $(grep -c . "$RUN/pm.calls") $(r15)"
+    touch -d @1 "$STATE/gpay_uid"; export WGS_PM="$FAKES/pm-gmsc"; ctl status >/dev/null
+    check "Play services installed later: not asked before the interval; after it asked once (also when pm is silent), then its rule, logged" "0 0 1 0 2 1 1 1" "$b $(grep -c . "$RUN/pm.calls") $(r15) $(logn 'Play services (uid 10123)') $(logn 'Play services is not installed')"
+    export WGS_PM="$FAKES/pm-nogms"
     ctl down >/dev/null
     # the package manager gives no answer (early boot): no rule, asked again at the next tick
     reset_state; : > "$RUN/gp.calls"

@@ -272,28 +272,39 @@ exempt_uids() {
 # with the setting off.
 # $STATE/gpay: "<4|6> <address> <seen, s since boot>"; $STATE/gpay_at: when,
 # and for which network, the last lookup ran; $STATE/gpay_uid: Play
-# services' uid (empty: not installed), looked up once like exempt_uids.
+# services' uid (empty: not installed - asked again every GPAY_UID_EVERY s),
+# looked up like exempt_uids.
 GPAY_HOST=payments-pa.googleapis.com
 GPAY_PKG=com.google.android.gms
 GPAY_EVERY=${WGS_GPAY_EVERY:-60}
 GPAY_KEEP=${WGS_GPAY_KEEP:-86400}
 GPAY_MAX=32
 GPAY_WAIT=${WGS_GPAY_WAIT:-6}     # s for the lookups of one round (_gpay_ask)
+GPAY_UID_EVERY=${WGS_GPAY_UID_EVERY:-600}    # s: "not installed" asked again (gpay_uid)
 PING6="${WGS_PING6:-/system/bin/ping6}"
 gpay_uid() {
     _f="$STATE/gpay_uid"
-    if [ ! -f "$_f" ] && [ "$("$GETPROP" sys.boot_completed 2>/dev/null)" = 1 ]; then
+    # "not installed" (an empty file) is asked again every GPAY_UID_EVERY s:
+    # Play services may be installed later. The file's time is renewed
+    # first, so a package manager that does not answer is not asked at
+    # every tick for it (a clock set back since then: asked now)
+    _o=""
+    if [ -f "$_f" ] && [ -z "$(cat "$_f" 2>/dev/null)" ]; then
+        _o=$(( $(epoch_now) - $(stat -c %Y "$_f" 2>/dev/null || echo 0) ))
+        if [ "$_o" -ge "$GPAY_UID_EVERY" ] || [ "$_o" -lt 0 ]; then _o=again; touch "$_f"; else _o=""; fi
+    fi
+    if { [ ! -f "$_f" ] || [ -n "$_o" ]; } && [ "$("$GETPROP" sys.boot_completed 2>/dev/null)" = 1 ]; then
         _p=$("$PM" list packages -U 2>/dev/null)
         if [ -n "$_p" ]; then
             _u=$(echo "$_p" | awk -v p="package:$GPAY_PKG" '$1 == p { for (i = 2; i <= NF; i++) if ($i ~ /^uid:[0-9]/) { u = substr($i, 5); sub(/[^0-9].*/, "", u); print u; exit } }')
             echo "$_u" > "$_f.tmp.$$" && mv -f "$_f.tmp.$$" "$_f"
             [ ! -e "$_f.tmp.$$" ] || rm -f "$_f.tmp.$$"
             if [ -n "$_u" ]; then wlog INFO "Google Pay: Play services (uid $_u) reaches $GPAY_HOST around the tunnel"
-            else wlog INFO "Google Pay: Play services is not installed - nothing goes around the tunnel"; fi
+            elif [ -z "$_o" ]; then wlog INFO "Google Pay: Play services is not installed - nothing goes around the tunnel"; fi
         fi
     fi
     cat "$_f" 2>/dev/null
-    unset _f _u _p
+    unset _f _u _p _o
 }
 # gpay_net6 - the default network has IPv6 (and IPv6 is on for the phone)
 gpay_net6() {
