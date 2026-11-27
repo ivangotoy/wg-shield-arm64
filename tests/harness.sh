@@ -2802,6 +2802,13 @@ if want speedmerge; then
     printf '%s' "203.0.113.141|5|30|ok|$(date +%s)|wg-SM-1,wg-SM-2" > "$WGS_DATA/speedtest"
     WGS_TEST_HS_MAX=2 ctl test favorites >/dev/null 2>&1
     check "results file without a final line break: the new result saved, the other tunnel kept" "1 wg-SM-1,wg-SM-2" "$(grep -c . "$WGS_DATA/speedtest") $(grep '^203.0.113.141|' "$WGS_DATA/speedtest" | cut -d'|' -f6)"
+    # the test lock: a folder without its pid yet is another test starting
+    # (busy), one left like that for longer is taken over (QQ has no tunnels)
+    mkdir -p "$STATE/test.lock"
+    b=$(ctl test QQ 2>&1 | sed -n 's/^error=//p')
+    touch -d @1 "$STATE/test.lock"
+    check "speed test lock without a pid: busy while new, taken over when old" "a speed test is already running|no tunnels in QQ" "$b|$(ctl test QQ 2>&1 | sed -n 's/^error=//p')"
+    rm -rf "$STATE/test.lock"
     reset_state
 fi
 

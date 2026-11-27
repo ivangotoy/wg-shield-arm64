@@ -56,7 +56,14 @@ test_lock_get() {
     mkdir -p "$STATE"
     if mkdir "$TEST_LOCK" 2>/dev/null; then echo $$ > "$TEST_LOCK/pid"; return 0; fi
     _stp=$(cat "$TEST_LOCK/pid" 2>/dev/null)
-    [ -n "$_stp" ] && kill -0 "$_stp" 2>/dev/null && return 1
+    if [ -n "$_stp" ]; then
+        kill -0 "$_stp" 2>/dev/null && return 1
+    else
+        # no pid yet: another test made the folder a moment ago and writes
+        # it next (test_stale reads it so too) - unless the folder is 30 s old
+        _stp=$(( $(epoch_now) - $(stat -c %Y "$TEST_LOCK" 2>/dev/null || echo 0) ))
+        [ "$_stp" -ge 0 ] && [ "$_stp" -lt 30 ] && return 1
+    fi
     test_cleanup; rm -rf "$TEST_LOCK"
     mkdir "$TEST_LOCK" 2>/dev/null || return 1
     echo $$ > "$TEST_LOCK/pid"
