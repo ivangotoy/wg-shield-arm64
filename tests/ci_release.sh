@@ -56,6 +56,12 @@
 #   old_git       resolve_ok's merge with a git that refuses `merge-tree
 #                 --write-tree` (before 2.38): the build stops, the log
 #                 names the git version needed
+#   push_reject   resolve_ok's build, the forge refuses the merge push: the
+#                 draft is deleted, nothing published, main unmoved
+#   json_reject   the same, the forge refuses only the update.json commit
+#                 after the publish: the release stays, the job fails
+#   build_env     the build step run with a token and another variable in
+#                 its environment: build() sees neither, the listed ones it does
 #   build         (with TREE, a module source tree) the build step's own
 #                 part (build-user) with TREE's module-ci.conf: what the
 #                 module zip holds at its top level
@@ -417,6 +423,42 @@ chmod 755 "$R/oldgit/git"
     SERVER_URL="$FORGE" REPOSITORY=o/r BASE_SHA="$RS_BASE" bash "$S" build "$R/repo" > "$R/build.log" 2>&1 )
 brc=$?
 echo "old_git: build_rc=$brc named=$(grep -c 'needs git 2.38' "$R/build.log") main_at_base=$([ "$(git -C "$R/repo" rev-parse HEAD)" = "$RS_BASE" ] && echo yes || echo no) zip=$([ -f "$R/repo/.ci-out/module.zip" ] && echo yes || echo no)"
+
+# push_reject / json_reject: resolve_ok's build (a merge to push), the forge
+# refuses a push (pre-receive hook of the local bare repo). push_reject: the
+# merge push before the publish - the draft is deleted, nothing published,
+# main unmoved. json_reject: only the update.json commit after the publish -
+# the release stays, the job fails
+for mode in push_reject json_reject; do
+    R="$D/$mode"; mkdir -p "$R/fake"; rs_repos "$R" ok; rs_build "$R"; brc=$?
+    if [ "$mode" = push_reject ]; then printf '#!/bin/sh\necho "rejected (example)" >&2\nexit 1\n' > "$R/forge.git/hooks/pre-receive"
+    else
+        cat > "$R/forge.git/hooks/pre-receive" <<'EOF'
+#!/bin/sh
+while read -r old new ref; do
+    case "$(git log -1 --format=%s "$new")" in "update.json:"*) echo "rejected (example)" >&2; exit 1 ;; esac
+done
+exit 0
+EOF
+    fi
+    chmod 755 "$R/forge.git/hooks/pre-receive"
+    m=$(git -C "$R/repo" rev-parse HEAD)
+    rs_release "$R"; rrc=$?
+    echo "$mode: build_rc=$brc release_rc=$rrc deleted=$(sed -n 's#^DELETE /api/v1/repos/o/r##p' "$R/fake/calls" | tr '\n' ' ')patches=$(grep -c '^PATCH ' "$R/fake/calls") merge_on_main=$(git --git-dir="$R/forge.git" merge-base --is-ancestor "$m" main 2>/dev/null && echo yes || echo no) update_json_main=$(git --git-dir="$R/forge.git" show main:update.json | grep -c '1.0-ci2')"
+done
+# build_env: the build user's environment holds only the listed variables:
+# a forge token or any other variable of the caller never reaches build()
+B="$D/build_env"; mkdir -p "$B/repo/.forgejo"
+cp "$S" "$B/repo/.forgejo/module-ci.sh"
+printf '%s\n' 'build() { env > "$OUT/env.txt"; printf x > "$OUT/module.zip"; }' > "$B/repo/.forgejo/module-ci.conf"
+printf 'id=demo\n' > "$B/repo/module.prop"
+git -C "$B/repo" init -q -b main; git -C "$B/repo" add -A; gu "$B/repo" commit -q -m seed
+( cd "$B" && env PATH="$D/bin:$PATH" SETPRIV_LOG="$B/setpriv.log" HOME="$D/home" TMPDIR="$D/tmp" GIT_CONFIG_GLOBAL="$D/gitconfig" GIT_CONFIG_NOSYSTEM=1 \
+    RELEASE_TOKEN=tok-example CI_OTHER_EXAMPLE=other-example SERVER_URL="$FORGE" REPOSITORY=o/r BASE_SHA="$(git -C "$B/repo" rev-parse HEAD)" \
+    bash "$S" build "$B/repo" > "$B/log" 2>&1 )
+rc=$?
+e="$B/repo/.ci-out/env.txt"
+echo "build_env: rc=$rc token=$(grep -c tok-example "$e") other=$(grep -c other-example "$e") server_url=$(grep -c "^SERVER_URL=$FORGE\$" "$e") home=$(grep -c '^HOME=.*/\.ci-home$' "$e")"
 
 if [ -n "$TREE" ]; then
     W="$D/build"; mkdir -p "$W"
