@@ -53,6 +53,9 @@
 #   resolve_crisscross  main and upstream merged each other, so they have
 #                 two merge bases, and conflict in module.prop: the build
 #                 stops and says why
+#   old_git       resolve_ok's merge with a git that refuses `merge-tree
+#                 --write-tree` (before 2.38): the build stops, the log
+#                 names the git version needed
 #   build         (with TREE, a module source tree) the build step's own
 #                 part (build-user) with TREE's module-ci.conf: what the
 #                 module zip holds at its top level
@@ -403,6 +406,17 @@ git init -q --bare -b main "$R/forge.git"; git -C "$R/repo" push -q "$R/forge.gi
 printf '[url "%s"]\n\tinsteadOf = %s/o/r.git\n' "$R/forge.git" "$FORGE" > "$R/gitconfig"
 rs_build "$R"; brc=$?
 echo "resolve_crisscross: build_rc=$brc bases=$(git -C "$R/repo" merge-base --all "$RS_BASE" "$(git -C "$R/up" rev-parse HEAD)" | grep -c .) stopped=$(grep -c 'merge conflict with upstream' "$R/build.log") named=$(grep -c 'several merge bases' "$R/build.log") main_at_base=$([ "$(git -C "$R/repo" rev-parse HEAD)" = "$RS_BASE" ] && echo yes || echo no) zip=$([ -f "$R/repo/.ci-out/module.zip" ] && echo yes || echo no)"
+
+# old_git: resolve_ok's repos, built with a git that has no `merge-tree
+# --write-tree` (before 2.38; a fake git in a folder of its own, first on
+# PATH for this build only): the build stops and the log names the cause
+R="$D/old_git"; mkdir -p "$R/oldgit"; rs_repos "$R" ok
+printf '#!/bin/sh\ncase " $* " in *" merge-tree "*"--write-tree "*) echo "usage: git merge-tree <base-tree> <branch1> <branch2>" >&2; exit 129 ;; esac\nexec "%s" "$@"\n' "$(command -v git)" > "$R/oldgit/git"
+chmod 755 "$R/oldgit/git"
+( cd "$R" && env PATH="$R/oldgit:$D/bin:$PATH" SETPRIV_LOG="$R/setpriv.log" HOME="$D/home" TMPDIR="$D/tmp" GIT_CONFIG_GLOBAL="$R/gitconfig" GIT_CONFIG_NOSYSTEM=1 \
+    SERVER_URL="$FORGE" REPOSITORY=o/r BASE_SHA="$RS_BASE" bash "$S" build "$R/repo" > "$R/build.log" 2>&1 )
+brc=$?
+echo "old_git: build_rc=$brc named=$(grep -c 'needs git 2.38' "$R/build.log") main_at_base=$([ "$(git -C "$R/repo" rev-parse HEAD)" = "$RS_BASE" ] && echo yes || echo no) zip=$([ -f "$R/repo/.ci-out/module.zip" ] && echo yes || echo no)"
 
 if [ -n "$TREE" ]; then
     W="$D/build"; mkdir -p "$W"

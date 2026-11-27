@@ -2839,6 +2839,7 @@ if want ci_release; then
     check "build step, a conflict in another line of module.prop as well: stopped as before" "resolve_prop: build_rc=1 stopped=1 main_at_base=yes zip=no" "$(echo "$out" | grep '^resolve_prop: ')"
     check "release: a merge whose tree is not the repeated resolution is refused before any forge call" "resolve_tamper: build_rc=0 release_rc=1 calls=0 refused=1" "$(echo "$out" | grep '^resolve_tamper: ')"
     check "build step, main and upstream with two merge bases (criss-cross) and a module.prop conflict: stopped, the reason logged" "resolve_crisscross: build_rc=1 bases=2 stopped=1 named=1 main_at_base=yes zip=no" "$(echo "$out" | grep '^resolve_crisscross: ')"
+    check "build step with a git that has no merge-tree --write-tree: stopped, the log names the git version needed" "old_git: build_rc=1 named=1 main_at_base=yes zip=no" "$(echo "$out" | grep '^old_git: ')"
     check "build step: the zip holds the module's files and THIRD_PARTY_NOTICES.md" "build: rc=0 top=LICENSE META-INF THIRD_PARTY_NOTICES.md action.sh ctl.sh customize.sh module.prop post-fs-data.sh service.sh sh system uninstall.sh webroot wg-shield.png" "$(echo "$out" | grep '^build: ')"
     check "build step: the copy of the tree holds no test run" no "$([ -e "$RUN/ci/build/tests/.run" ] && echo yes || echo no)"
 fi

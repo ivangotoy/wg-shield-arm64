@@ -71,10 +71,11 @@ put_desc() {
 # on a SYNC_ROOT_PROP conflict when OURS and THEIRS have several merge bases. The build
 # step merges with it, the release step checks the built merge against it.
 ci_merge_tree() {
-    local out tree mb tmp f mode blob v vc e rc=0
-    if out="$(git merge-tree --write-tree --no-messages --name-only "$1" "$2")"; then
-        printf '%s\n' "$out" | head -n1; return 0
-    fi
+    local out tree mb tmp f mode blob v vc e rc=0 mrc=0
+    out="$(git merge-tree --write-tree --no-messages --name-only "$1" "$2")" || mrc=$?
+    if [ "$mrc" = 0 ]; then printf '%s\n' "$out" | head -n1; return 0; fi
+    # 1 = conflicts; anything else is no merge at all (an older git refuses --write-tree)
+    if [ "$mrc" != 1 ]; then log "git merge-tree --write-tree failed (exit $mrc; it needs git 2.38 or newer)"; return 1; fi
     tree="$(printf '%s\n' "$out" | head -n1)"
     [[ "$tree" =~ ^[0-9a-f]{40}$ ]] || return 1
     tmp="$(mktemp -d)" || return 1
