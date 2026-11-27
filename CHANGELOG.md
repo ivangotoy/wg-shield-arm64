@@ -20,6 +20,7 @@ One phone Back leaves Help.
 
 * **Google Pay: the address lookup no longer depends on busybox's `timeout`, and cannot hold the module up** - the lookup was bounded with the root manager's busybox `timeout`; a busybox without that applet made every lookup fail, so no address was ever learnt, and without busybox nothing bounded it. A lookup whose DNS answer does not come runs while the watchdog holds its lock, so `ctl.sh` commands and the WebUI waited for it (up to 15 s, or unbounded). Now the lookups of one round share a deadline of 6 s that needs no tool: a lookup still running then is stopped and the round ends (the kept addresses stay); the next round follows a minute later as before
 * **Google Pay: Play services installed after the first look is found** - the package manager was asked once for Play services' uid, and "not installed" stayed until the next reboot, so Play services installed later got no rule 5015. Now "not installed" is asked again every 10 minutes
+* **Release pipeline: no guessed merge of `module.prop` after criss-cross merges** - when main and upstream had merged each other, they have more than one merge base; keeping main's version lines in a `module.prop` conflict then merged the file against whichever base git named first, which depends on commit times, and an upstream change to another line of the file could be lost without a word. Such a conflict now stops the build with the reason in the log (resolve by hand, as for any other conflict)
 
 ---
 

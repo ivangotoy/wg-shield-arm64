@@ -50,6 +50,9 @@
 #                 the build stops
 #   resolve_tamper    resolve_ok's merge replaced by one with another tree
 #                 (upstream's version lines): refused before any forge call
+#   resolve_crisscross  main and upstream merged each other, so they have
+#                 two merge bases, and conflict in module.prop: the build
+#                 stops and says why
 #   build         (with TREE, a module source tree) the build step's own
 #                 part (build-user) with TREE's module-ci.conf: what the
 #                 module zip holds at its top level
@@ -369,6 +372,37 @@ for mode in resolve_ok resolve_other resolve_prop resolve_tamper; do
         *) echo "$mode: build_rc=$brc stopped=$(grep -c 'merge conflict with upstream' "$R/build.log") main_at_base=$([ "$(git -C "$R/repo" rev-parse HEAD)" = "$RS_BASE" ] && echo yes || echo no) zip=$([ -f "$R/repo/.ci-out/module.zip" ] && echo yes || echo no)" ;;
     esac
 done
+
+# resolve_crisscross: main and upstream merged each other (criss-cross), so
+# they have two best merge bases; then upstream bumped its version and set
+# its description back, main made another release. git merges against the
+# merge of both bases; one base alone gives another module.prop depending on
+# which one git names: the build stops instead of picking one
+R="$D/resolve_crisscross"; mkdir -p "$R"
+git init -q -b main "$R/up"
+printf '%s\n' id=demo name=Demo version=1.0 versionCode=3 'description=Upstream text' > "$R/up/module.prop"
+printf '{"version": "1.0"}\n' > "$R/up/update.json"
+gu "$R/up" add -A; gu "$R/up" commit -q -m 'upstream 1.0'
+git clone -q "$R/up" "$R/repo"
+mkdir -p "$R/repo/.forgejo"; cp "$S" "$R/repo/.forgejo/module-ci.sh"
+printf '%s\n' "UPSTREAM_URL=$R/up" UPSTREAM_BRANCH=main ZIP_PREFIX=demo VERSION_CODE_FLOOR=1 UPDATE_JSON_PATH=update.json \
+    SYNC_ROOT_PROP=module.prop 'build() { pack_paths module.prop; }' > "$R/repo/.forgejo/module-ci.conf"
+sed -i 's/^version=.*/version=1.0-ci2/; s/^versionCode=.*/versionCode=5/' "$R/repo/module.prop"
+gu "$R/repo" add -A; gu "$R/repo" commit -q -m 'fork, release 1.0-ci2'
+sed -i 's/^description=.*/description=Fork text/' "$R/repo/module.prop"; gu "$R/repo" commit -q -am 'fork: description'
+printf 'u\n' > "$R/up/u"; gu "$R/up" add u; gu "$R/up" commit -q -m 'upstream: u'
+B_UP=$(git -C "$R/up" rev-parse HEAD); B_FK=$(git -C "$R/repo" rev-parse HEAD)
+gu "$R/repo" fetch -q "$R/up" main; gu "$R/repo" merge -q --no-ff --no-edit "$B_UP"
+gu "$R/up" fetch -q "$R/repo" "$B_FK"; gu "$R/up" merge -q --no-ff --no-edit "$B_FK"
+sed -i 's/^name=.*/name=Demo Two/; s/^version=.*/version=1.1/; s/^versionCode=.*/versionCode=4/; s/^description=.*/description=Upstream text/' "$R/up/module.prop"
+gu "$R/up" commit -q -am 'upstream 1.1, description back'
+sed -i 's/^version=.*/version=1.0-ci3/; s/^versionCode=.*/versionCode=6/' "$R/repo/module.prop"
+gu "$R/repo" commit -q -am 'fork, release 1.0-ci3'
+RS_BASE=$(git -C "$R/repo" rev-parse HEAD)
+git init -q --bare -b main "$R/forge.git"; git -C "$R/repo" push -q "$R/forge.git" main
+printf '[url "%s"]\n\tinsteadOf = %s/o/r.git\n' "$R/forge.git" "$FORGE" > "$R/gitconfig"
+rs_build "$R"; brc=$?
+echo "resolve_crisscross: build_rc=$brc bases=$(git -C "$R/repo" merge-base --all "$RS_BASE" "$(git -C "$R/up" rev-parse HEAD)" | grep -c .) stopped=$(grep -c 'merge conflict with upstream' "$R/build.log") named=$(grep -c 'several merge bases' "$R/build.log") main_at_base=$([ "$(git -C "$R/repo" rev-parse HEAD)" = "$RS_BASE" ] && echo yes || echo no) zip=$([ -f "$R/repo/.ci-out/module.zip" ] && echo yes || echo no)"
 
 if [ -n "$TREE" ]; then
     W="$D/build"; mkdir -p "$W"

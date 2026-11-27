@@ -67,8 +67,9 @@ put_desc() {
 # conflict only in what the release commit writes is resolved to OURS' side:
 # UPDATE_JSON_PATH as a whole, and in SYNC_ROOT_PROP the version= / versionCode= lines
 # (the file is merged again with both sides' and the base's lines set to OURS' values, so
-# THEIRS' other changes to it stay). Prints nothing and fails on any other conflict. The
-# build step merges with it, the release step checks the built merge against it.
+# THEIRS' other changes to it stay). Prints nothing and fails on any other conflict, and
+# on a SYNC_ROOT_PROP conflict when OURS and THEIRS have several merge bases. The build
+# step merges with it, the release step checks the built merge against it.
 ci_merge_tree() {
     local out tree mb tmp f mode blob v vc e rc=0
     if out="$(git merge-tree --write-tree --no-messages --name-only "$1" "$2")"; then
@@ -76,7 +77,6 @@ ci_merge_tree() {
     fi
     tree="$(printf '%s\n' "$out" | head -n1)"
     [[ "$tree" =~ ^[0-9a-f]{40}$ ]] || return 1
-    mb="$(git merge-base "$1" "$2")" || return 1
     tmp="$(mktemp -d)" || return 1
     GIT_INDEX_FILE="$tmp/index" git read-tree "$tree" || rc=1
     while [ "$rc" = 0 ] && IFS= read -r f; do
@@ -86,6 +86,13 @@ ci_merge_tree() {
         if [ "$f" = "$UPDATE_JSON_PATH" ]; then
             blob="$(git rev-parse "$1:$f")" || { rc=1; break; }
         elif [ -n "$SYNC_ROOT_PROP" ] && [ "$f" = "$SYNC_ROOT_PROP" ]; then
+            # one merge base only: with several (criss-cross merges) git merges against their
+            # merge, and the file merged here would depend on which one git happens to name
+            mb="$(git merge-base --all "$1" "$2")" || { rc=1; break; }
+            if [ "$(printf '%s\n' "$mb" | grep -c .)" != 1 ]; then
+                log "several merge bases (criss-cross merges): $f is not merged keeping main's side by itself"
+                rc=1; break
+            fi
             if ! { git show "$1:$f" > "$tmp/ours" && git show "$mb:$f" > "$tmp/base" && git show "$2:$f" > "$tmp/theirs"; }; then rc=1; break; fi
             v="$(prop_get version "$tmp/ours")"; vc="$(prop_get versionCode "$tmp/ours")"; e=""
             [ -z "$v" ] || e="s|^version=.*|version=$(sedq "$v")|;"
