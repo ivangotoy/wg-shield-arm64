@@ -1165,7 +1165,12 @@ tunnel_ensure() {
             rm -f "$STATE/loaded"; fresh=1
         fi
         if [ -n "$T_EPHOST" ]; then
-            T_EPIP=$(resolve_host "$T_EPHOST") || { ERR=resolving; T_EPIP=""; routes_ensure; return 3; }
+            # not asked when a lookup failed earlier in this tick (reresolve,
+            # then a recovery restart or switch): one failed round of up to
+            # RESOLVE_ROUND s under the lock per tick, the next tick asks again
+            if [ "$RES_FAILED" = 1 ] || ! T_EPIP=$(resolve_host "$T_EPHOST"); then
+                RES_FAILED=1; ERR=resolving; T_EPIP=""; routes_ensure; return 3
+            fi
             wlog INFO "endpoint $T_EPHOST is $T_EPIP"
             mono_now > "$STATE/resolved_at"
         fi
@@ -1254,7 +1259,7 @@ reresolve() {
     last=$(cat "$STATE/resolved_at" 2>/dev/null || echo 0)
     [ $(( $(mono_now) - last )) -ge 60 ] || return 0
     mono_now > "$STATE/resolved_at"
-    new=$(resolve_host "$T_EPHOST") || return 0
+    new=$(resolve_host "$T_EPHOST") || { RES_FAILED=1; return 0; }
     [ "$new" != "$T_EPIP" ] || return 0
     ep_rule "$new"
     if [ "$FAKE_LINK" = 0 ]; then
@@ -1295,6 +1300,7 @@ wgs_tick() {
     ST_TUNNEL=$S_ACTIVE; ST_ENDPOINT=""; ST_HSAGE="-"; ST_DEF=$DEF; ST_ANDVPN=$ANDVPN
     ST_REASON=""; ST_RX=""; ST_TX=""; ST_EPHOST=""; ST_IPV6=""; V6ON=0; ST_PAUSELEFT=$(pause_left)
     ST_TYPE=""; T_TYPE=""; T_DNS=""; T_DNS6=""; T_DNSALL=""; ST_DNS=""; ST_DNS_SERVER=""; ST_DNS_LAN=""; ST_BLOCK=0; ST_NETS=""; EXTRA=""; EXTRA_NAMES=""; ST_RECOVER=""; ST_RECOVER_FROM=""
+    RES_FAILED=0    # 1: a host-name lookup failed in this tick (tunnel_ensure)
 
     if [ -z "$S_ACTIVE" ]; then
         ST_STATE=off

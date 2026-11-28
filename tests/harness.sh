@@ -3087,6 +3087,28 @@ if want resolve_budget; then
     ctl down >/dev/null
 fi
 
+if want resolve_once; then
+    echo "resolve_once: a host-name tunnel found down whose lookups fail: one round of lookups per tick (looked up again, then the first restart)"
+    reset_state
+    RO="$RUN/ronce.log"; rm -f "$RO"
+    # shellcheck disable=SC2016 # the fakes' own variables
+    printf '#!/bin/sh\ncase "$1" in timeout) shift 2; exec "$@" ;; nslookup) [ "$3" = 1.0.0.1 ] || exit 1; printf "Name:\\t%%s\\nAddress: 203.0.113.80\\n" "$2" ;; *) exit 127 ;; esac\n' > "$FAKES/bbok"
+    # shellcheck disable=SC2016
+    printf '#!/bin/sh\ncase "$1" in timeout) shift 2; exec "$@" ;; nslookup) echo "$3" >> "%s"; exit 1 ;; *) exit 127 ;; esac\n' "$RO" > "$FAKES/bbno"
+    chmod 755 "$FAKES/bbok" "$FAKES/bbno"
+    conf "$WGS_DL/wg-RO-1.conf" vpn.example.com:51820
+    ctl import wg-RO-1.conf >/dev/null
+    date +%s > "$STATE/fake_hs"
+    WGS_BB="$FAKES/bbok" ctl up wg-RO-1 >/dev/null
+    b="$(st state) $(st endpoint)"
+    echo 0 > "$STATE/resolved_at"; echo $(( $(date +%s) - 600 )) > "$STATE/fake_hs"
+    WGS_BB="$FAKES/bbno" ctl status >/dev/null
+    c=$(grep -c . "$RO"); : > "$RO"
+    WGS_BB="$FAKES/bbno" ctl status >/dev/null
+    check "one tick: 3 lookups (not 6), the restart still made; the next tick asks again" "up 203.0.113.80:51820 3 restart 1/2 3" "$b $c $(st recover) $(grep -c . "$RO")"
+    ctl down >/dev/null
+fi
+
 echo
 echo "passed $PASS, failed $FAILN"
 [ "$FAILN" = 0 ]
