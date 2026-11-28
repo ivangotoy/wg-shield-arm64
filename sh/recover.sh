@@ -8,7 +8,7 @@
 #
 # How often (settings CHECKS): 5 = every 5 s, 30 = every 30 s (default),
 # off = never - then only WireGuard's 180 s handshake rule finds a dead
-# tunnel (no requests at all; the self-healing still runs, just later).
+# tunnel (no check requests; the self-healing still runs, just later).
 #
 # Liveness: every CHECKS s the watchdog pings through the tunnel
 # (1.1.1.1, then 8.8.8.8, ~3 s each; bound to wgs0). The rx counter is NOT

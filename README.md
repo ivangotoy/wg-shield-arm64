@@ -39,7 +39,7 @@ Android sees no VPN - no key icon, no `VpnService`, nothing an app can detect or
 - **Self-healing** - the tunnel is pinged through itself every 30 s (or 5 s); no answer = noticed within about 40 s (10 s with 5 s), not after WireGuard's 3 minutes. It is restarted twice at once, and with **Auto-switch** on, your other tunnels are tried - the same country first (`wg-BG-14` → other BG tunnels), then any other, never one on a server address that already failed, the fastest by the last speed test first. The kill switch holds the whole time
 - **One notification** when the tunnel could not be fixed (or after a switch to another tunnel), saying what was tried - you learn you have no internet without opening the manager
 - **Checks profile: Battery or Always** - Battery (default) checks only while the screen is on and checks at once when it comes on; Always checks day and night (hotspot devices, background apps)
-- **Check every: 5 s, 30 s or Off** - how often the tunnel is pinged (30 s by default); Off sends no pings at all and leaves it to WireGuard's 3-minute rule
+- **Check every: 5 s, 30 s or Off** - how often the tunnel is pinged (30 s by default); Off sends no check pings and leaves it to WireGuard's 3-minute rule (Google Pay's address lookup still pings, see below)
 - **Restart WG Shield** - one button (or `ctl.sh restart`) restarts the watchdog and rebuilds the tunnel when something looks stuck, without a reboot; the kill switch holds meanwhile
 - **Your choice is not a failure** - turn the tunnel off or pause it (15 min / 1 h / 4 h) and the phone simply uses your connection
 - **IPv4 and IPv6** - a tunnel with an IPv6 address and `::/0` carries IPv6 too; one without blocks IPv6 while it is on, so nothing goes around it

@@ -275,7 +275,7 @@
   <ul>
     <li><strong>30 s</strong> (default) - 120 pings an hour, about 35 KB. A dead tunnel is found in about 40 seconds.</li>
     <li><strong>5 s</strong> - 720 pings an hour, about 200 KB. A dead tunnel is found in about 10 seconds. While the phone is otherwise idle on mobile data, the frequent pings keep the modem awake, which costs some battery.</li>
-    <li><strong>Off</strong> - no pings at all to check the tunnel (<em>Google Pay around the tunnel</em> still pings once a minute to look its server up). Only WireGuard itself watches the tunnel (no handshake for 3 minutes = down), which sends nothing extra. The self-healing and the notification still work, they just start later. Battery / Always has no effect then.</li>
+    <li><strong>Off</strong> - no pings at all to check the tunnel (<em>Google Pay around the tunnel</em> still pings once a minute to look its server up). Only WireGuard itself watches the tunnel (no handshake for 3 minutes = down), which sends nothing extra. The self-healing and the notification still work, they just start later. Battery / Always then only decides when the Google Pay lookup runs.</li>
   </ul>
   <p>A ping is tiny, and it goes through the tunnel: the resolver it is sent to sees the VPN server's address, not yours. A recovery that has started checks every few seconds, whatever is set here, so its steps can tell at once whether they worked. A network change checks at once too.</p>
   <h3>Checks: Battery or Always</h3>
