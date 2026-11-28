@@ -3125,6 +3125,33 @@ if want upwait_slow; then
     ctl down >/dev/null
 fi
 
+if want busy_effect; then
+    echo "busy_effect: a command that does not get the lock changes nothing, or says its change is saved"
+    reset_state
+    conf "$WGS_DL/wg-BE-1.conf" 203.0.113.181:51820
+    conf "$WGS_DL/wg-BE-2.conf" 203.0.113.182:51820
+    ctl import wg-BE-1.conf >/dev/null; ctl import wg-BE-2.conf >/dev/null
+    date +%s > "$STATE/fake_hs"
+    ctl up wg-BE-1 >/dev/null
+    # ctl with its 1 s waits skipped (lock_get waits 20 x 1 s); the lock held by a live process
+    nos() { $TSH -c "sleep() { :; }; . \"\$WGS_MODDIR/ctl.sh\"" ctl "$@" 2>&1; }
+    sleep 120 & holder=$!
+    mkdir "$STATE/lock" && echo "$holder" > "$STATE/lock/pid"
+    out=$(nos pause 5); b="$(echo "$out" | kv ok) $([ -f "$STATE/pause_until" ] && echo yes || echo no)"
+    echo $(( $(cut -d. -f1 /proc/uptime) + 300 )) > "$STATE/pause_until"
+    out=$(nos resume); b="$b $(echo "$out" | kv ok) $([ -f "$STATE/pause_until" ] && echo yes || echo no)"
+    rm -rf "$STATE/lock"; kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
+    rm -f "$STATE/pause_until"; ctl status >/dev/null
+    check "lock busy: pause and resume refused, nothing changed" "0 no 0 yes" "$b"
+    # up: another process takes the lock while up waits for the first handshake
+    rm -f "$STATE/fake_hs"
+    sleep 120 & holder=$!
+    out=$(WGS_UP_WAIT=3 $TSH -c "sleep() { mkdir \"\$STATE/lock\" 2>/dev/null && echo $holder > \"\$STATE/lock/pid\"; :; }; . \"\$WGS_MODDIR/ctl.sh\"" ctl up wg-BE-2 2>&1)
+    rm -rf "$STATE/lock"; kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
+    check "up, the lock taken while it waits: refused with the note that the switch is saved" "0 1 wg-BE-2" "$(echo "$out" | kv ok) $(echo "$out" | grep -c '^error=busy - the change is saved') $(setting ACTIVE)"
+    ctl down >/dev/null
+fi
+
 echo
 echo "passed $PASS, failed $FAILN"
 [ "$FAILN" = 0 ]

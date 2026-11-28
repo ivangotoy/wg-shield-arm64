@@ -178,9 +178,11 @@ route_dev() {
     echo "${_d:-blocked}"
 }
 
-# run one tick now under the lock (the watchdog does the same every 10 s)
+# run one tick now under the lock (the watchdog does the same every 10 s),
+# after a change that is saved already (up, resume): a lock that stays busy
+# does not undo it - the watchdog applies it at its next check
 tick_now() {
-    lock_get 20 || fail "busy - try again"
+    lock_get 20 || fail "busy - the change is saved, the watchdog applies it at its next check"
     wgs_tick
     lock_release
 }
@@ -361,14 +363,18 @@ case "$cmd" in
         # without leading zeros: bash and busybox ash read 010 as octal, 08 as an error
         m=${1#"${1%%[!0]*}"}; m=${m:-0}
         [ "$m" -ge 1 ] && [ "$m" -le 1440 ] || fail "minutes must be 1-1440"
+        # under the lock, as every change: "busy" then means nothing changed
+        ctl_lock
         settings_load; [ -n "$S_ACTIVE" ] || fail "tunnel is off - nothing to pause"
         echo $(( $(mono_now) + m * 60 )) > "$STATE/pause_until"
         wlog INFO "ctl: pause $m min"
-        tick_now; print_status
+        tick_locked; print_status
         ;;
     resume)
+        ctl_lock
         rm -f "$STATE/pause_until" "$STATE/heal"
         wlog INFO "ctl: resume"
+        lock_release
         wait_up; print_status
         ;;
     set)
