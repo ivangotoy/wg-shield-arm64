@@ -229,7 +229,9 @@ DESC="$(head -c 200 "$OUT/desc" | head -n1 | tr -cd '[:print:]')"
 # upstream's tip, kept by sha: the bundle fetch below rewrites FETCH_HEAD
 MERGES=0 UP_TIP=""; ! declare -F prebuilt >/dev/null && [ -n "$UPSTREAM_URL" ] && MERGES=1
 if [ "$MERGES" = 1 ]; then git fetch -q "$UPSTREAM_URL" "$UPSTREAM_BRANCH"; UP_TIP="$(git rev-parse FETCH_HEAD)"; fi
+BUILT_MERGE=0
 if [ "$SRC_SHA" != "$BASE_SHA" ]; then
+    BUILT_MERGE=1
     [[ "$UP_SHA" =~ ^[0-9a-f]{40}$ ]] || die "bad upstream sha"
     git merge-base --is-ancestor "$UP_SHA" "$UP_TIP" || die "$UP_SHA is not on upstream $UPSTREAM_BRANCH"
     regular "$OUT/merge.bundle"
@@ -241,10 +243,18 @@ if [ "$SRC_SHA" != "$BASE_SHA" ]; then
 fi
 # the code's version: main's SYNC_ROOT_PROP names the last release (the release commit
 # writes it), so with an upstream merged into main the version is upstream's, read at the
-# newest upstream commit in the built tree (not from src: the build user can write it)
+# newest upstream commit in the built tree (not from src: the build user can write it).
+# A built merge: its upstream parent, checked above. Else the merge base with upstream's
+# tip; upstream may have moved since the build and merged a commit of main, and with
+# several merge bases git names one by commit time: then the release stops (a new run
+# merges the new tip and takes the first way)
 UP_VERSION=""
 if [ "$MERGES" = 1 ] && [ -n "$SYNC_ROOT_PROP" ]; then
-    UP_BASE="$(git merge-base "$UP_TIP" "$SRC_SHA" || true)"
+    if [ "$BUILT_MERGE" = 1 ]; then UP_BASE=$UP_SHA
+    else
+        UP_BASE="$(git merge-base --all "$UP_TIP" "$SRC_SHA" || true)"
+        [ "$(printf '%s\n' "$UP_BASE" | grep -c .)" -le 1 ] || die "upstream $UPSTREAM_BRANCH has several merge bases with $SRC_SHA (it moved during the run): dispatch the release again"
+    fi
     if [ -n "$UP_BASE" ] && git show "$UP_BASE:$SYNC_ROOT_PROP" > "$REL/up.prop" 2>/dev/null; then
         UP_VERSION="$(prop_get version "$REL/up.prop")"
     fi

@@ -62,6 +62,13 @@
 #                 after the publish: the release stays, the job fails
 #   build_env     the build step run with a token and another variable in
 #                 its environment: build() sees neither, the listed ones it does
+#   up_moved      resolve_ok's build, then upstream merges main's commit before
+#                 the release step fetches it (two merge bases, upstream's
+#                 commits older): the release is named after the built merge's
+#                 upstream parent, not after the base git names by date
+#   up_moved_base main had merged upstream already (no merge built), upstream
+#                 then merges an older commit of main: two merge bases, the
+#                 release stops before any forge call
 #   build         (with TREE, a module source tree) the build step's own
 #                 part (build-user) with TREE's module-ci.conf: what the
 #                 module zip holds at its top level
@@ -459,6 +466,28 @@ git -C "$B/repo" init -q -b main; git -C "$B/repo" add -A; gu "$B/repo" commit -
 rc=$?
 e="$B/repo/.ci-out/env.txt"
 echo "build_env: rc=$rc token=$(grep -c tok-example "$e") other=$(grep -c other-example "$e") server_url=$(grep -c "^SERVER_URL=$FORGE\$" "$e") home=$(grep -c '^HOME=.*/\.ci-home$' "$e")"
+
+# up_moved / up_moved_base: upstream moves between the build step's fetch and the
+# release step's (it merges a commit of main, as a merged pull request does)
+R="$D/up_moved"; mkdir -p "$R/fake"
+export GIT_COMMITTER_DATE="2026-01-01T00:00:00Z" GIT_AUTHOR_DATE="2026-01-01T00:00:00Z"
+rs_repos "$R" ok
+unset GIT_COMMITTER_DATE GIT_AUTHOR_DATE
+gu "$R/repo" commit -q --allow-empty -m 'fork: a later commit'; RS_BASE=$(git -C "$R/repo" rev-parse HEAD); git -C "$R/repo" push -q "$R/forge.git" main
+rs_build "$R"; brc=$?
+gu "$R/up" fetch -q "$R/repo" "$RS_BASE"; gu "$R/up" merge -q --no-ff --no-edit -s ours FETCH_HEAD
+rs_release "$R"; rrc=$?
+git -C "$R/repo" fetch -q "$R/up" main
+echo "up_moved: build_rc=$brc bases=$(git -C "$R/repo" merge-base --all FETCH_HEAD "$(sed -n 1p "$R/repo/.ci-out/src")" | grep -c .) release_rc=$rrc released=$(git --git-dir="$R/forge.git" show main:update.json | python3 -I -c 'import json, sys; d = json.load(sys.stdin); print(d.get("version"), d.get("versionCode"))')"
+R="$D/up_moved_base"; mkdir -p "$R/fake"; rs_repos "$R" ok
+F1=$RS_BASE
+gu "$R/repo" fetch -q "$R/up" main; gu "$R/repo" merge -q --no-ff --no-edit -s ours FETCH_HEAD
+RS_BASE=$(git -C "$R/repo" rev-parse HEAD); git -C "$R/repo" push -q "$R/forge.git" main
+rs_build "$R"; brc=$?
+gu "$R/up" fetch -q "$R/repo" "$F1"; gu "$R/up" merge -q --no-ff --no-edit -s ours FETCH_HEAD
+rs_release "$R"; rrc=$?
+git -C "$R/repo" fetch -q "$R/up" main
+echo "up_moved_base: build_rc=$brc merged=$([ "$(sed -n 1p "$R/repo/.ci-out/src")" = "$RS_BASE" ] && echo no || echo yes) bases=$(git -C "$R/repo" merge-base --all FETCH_HEAD "$RS_BASE" | grep -c .) release_rc=$rrc calls=$(cat "$R/fake/calls" 2>/dev/null | grep -c .) refused=$(grep -c 'several merge bases' "$R/release.log")"
 
 if [ -n "$TREE" ]; then
     W="$D/build"; mkdir -p "$W"
