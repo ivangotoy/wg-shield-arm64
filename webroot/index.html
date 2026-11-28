@@ -841,8 +841,12 @@ async function runTest(b) {
   const box = TUN_SEL === 'fav' ? 'favorites' : TUN_SEL === 'oth' ? 'others' : TUN_SEL;
   if (!box) return;
   _testing = true; b.disabled = true; b.textContent = 'Testing…';
+  // as long as the box can take: per tunnel of it (every type, as the module
+  // counts them) a wait for the lock and a lookup of a host name (20 s + 18 s)
+  // and about 16 s to measure - at least 5 minutes
+  const n = (ST.t || []).map(l => String(l).split('|')).filter(f => box === 'favorites' ? f[6] === '1' : box === 'others' ? !tunCountry(f[0]) : tunCountry(f[0]) === box).length;
   try {
-    const r = parseKV(await ctl('test ' + q(box), 300000));
+    const r = parseKV(await ctl('test ' + q(box), Math.max(300000, 60000 + 60000 * n)));
     if (r.ok === '1') toast(`Tested ${num(r.addresses)} server ${num(r.addresses) === 1 ? 'address' : 'addresses'} (${num(r.tunnels)} tunnels)`, 'ok');
     else toast(r.error || 'Test failed', 'err');
   } finally { _testing = false; _tunSig = ''; await poll(); }
