@@ -56,7 +56,14 @@ test_lock_get() {
     mkdir -p "$STATE"
     if mkdir "$TEST_LOCK" 2>/dev/null; then echo $$ > "$TEST_LOCK/pid"; return 0; fi
     _stp=$(cat "$TEST_LOCK/pid" 2>/dev/null)
-    [ -n "$_stp" ] && kill -0 "$_stp" 2>/dev/null && return 1
+    if [ -n "$_stp" ]; then
+        kill -0 "$_stp" 2>/dev/null && return 1
+    else
+        # no pid yet: another test made the folder a moment ago and writes
+        # it next (test_stale reads it so too) - unless the folder is 30 s old
+        _stp=$(( $(epoch_now) - $(stat -c %Y "$TEST_LOCK" 2>/dev/null || echo 0) ))
+        [ "$_stp" -ge 0 ] && [ "$_stp" -lt 30 ] && return 1
+    fi
     test_cleanup; rm -rf "$TEST_LOCK"
     mkdir "$TEST_LOCK" 2>/dev/null || return 1
     echo $$ > "$TEST_LOCK/pid"
@@ -188,7 +195,11 @@ test_run() {
         _sa=$T_EPIP
         if [ -n "$T_EPHOST" ]; then
             # rule 5001 is one of ours (50xx): only under the watchdog's lock
-            if lock_get 20; then _sa=$(resolve_host "$T_EPHOST") || _sa="host:$T_EPHOST"; lock_release; else _sa="host:$T_EPHOST"; fi
+            if lock_get 20; then _sa=$(resolve_host "$T_EPHOST") || _sa="host:$T_EPHOST"; lock_release
+            else
+                _sa="host:$T_EPHOST"
+                wlog WARN "speed test: $_stn - the watchdog stayed busy for 20 s, $T_EPHOST not looked up (shown as not found)"
+            fi
         fi
         [ -n "$_sa" ] || _sa="host:${T_EP%:*}"
         _spairs="$_spairs$_sa $_stn
@@ -226,24 +237,50 @@ test_run() {
         echo "r=$_sa|$R_HS|$R_PING|$_slist|$R_ST"
         wlog INFO "speed test: $_sa ($_slist) - $R_ST${R_PING:+, ping $R_PING ms}${R_HS:+, handshake $R_HS ms}"
     done
-    # merge: this run replaces the lines of its addresses and of its tunnels
+    # merge: this run replaces the lines of its addresses and of its tunnels.
+    # The other names of an old line of an address measured now (tunnels of
+    # another box on the same server) go onto the new line: one result
+    # counts for every tunnel of an address (test_rank)
     _ssaved=0
     _snew=$(printf '%s' "$_sres" | cut -d'|' -f1)
     _stun=$(printf '%s' "$_spairs" | awk 'NF { print $2 }')
-    {
-        [ -f "$TEST_FILE" ] && awk -F'|' -v A="$(echo $_snew)" -v T="$(echo $_stun)" '
+    # (an empty line first: a file edited by hand may end without a line break)
+    { [ -f "$TEST_FILE" ] && cat "$TEST_FILE"; echo; echo "--new--"; printf '%s' "$_sres"; } |
+        awk -F'|' -v A="$(echo $_snew)" -v T="$(echo $_stun)" '
             BEGIN { OFS = "|"; n = split(A, a, " "); for (i = 1; i <= n; i++) da[a[i]] = 1
                     n = split(T, t, " "); for (i = 1; i <= n; i++) dt[t[i]] = 1 }
-            NF >= 6 && !($1 in da) {
+            $0 == "--new--" { nw = 1; next }
+            !nw && NF >= 6 {
                 m = split($6, x, ","); keep = ""
                 for (i = 1; i <= m; i++) if (!(x[i] in dt)) keep = keep (keep == "" ? "" : ",") x[i]
-                if (keep != "") { $6 = keep; print }
-            }' "$TEST_FILE"
-        printf '%s' "$_sres"
-    } > "$TEST_FILE.tmp.$$" && chmod 600 "$TEST_FILE.tmp.$$" && mv -f "$TEST_FILE.tmp.$$" "$TEST_FILE" && _ssaved=1
+                if (keep == "") next
+                if ($1 in da) { ex[$1] = ex[$1] "," keep; next }
+                $6 = keep; print; next
+            }
+            nw && NF >= 6 { if ($1 in ex) $6 = $6 ex[$1]; print }' > "$TEST_FILE.tmp.$$" &&
+        chmod 600 "$TEST_FILE.tmp.$$" && mv -f "$TEST_FILE.tmp.$$" "$TEST_FILE" && _ssaved=1
     [ "$_ssaved" = 1 ] || { rm -f "$TEST_FILE.tmp.$$"; wlog WARN "speed test: the results could not be saved"; }
     echo "ok=1"; echo "box=$_sbox"; echo "epoch=$_snow"; echo "addresses=$_stot"; echo "tunnels=$_scnt"
     unset _sbox _sst _saa _sak _spairs _scnt _sa _sas _stot _snow _si _sres _snames _slist _spick _snew _stun _stn _ssaved
+}
+
+# test_moved NAME ADDRESS - tunnel NAME was imported with the server address
+# ADDRESS (as tun_parse gives T_EPIP): a result of another address that still
+# names it (imported again on another server) is not its own any more - the
+# name goes from that line, a line left without names goes. A host-name
+# tunnel (no ADDRESS) keeps its result: its address is known only once it
+# is looked up. Not while a test runs: it writes the file when it ends
+test_moved() {
+    [ -n "$2" ] && [ -f "$TEST_FILE" ] || return 0
+    test_running && return 0
+    awk -F'|' -v n="$1" -v a="$2" 'NF >= 6 && $1 != a { m = split($6, x, ","); for (i = 1; i <= m; i++) if (x[i] == n) f = 1 } END { exit !f }' "$TEST_FILE" || return 0
+    awk -F'|' -v n="$1" -v a="$2" 'BEGIN { OFS = "|" }
+        NF >= 6 && $1 != a { m = split($6, x, ","); k = ""
+            for (i = 1; i <= m; i++) if (x[i] != n) k = k (k == "" ? "" : ",") x[i]
+            if (k == "") next
+            $6 = k }
+        { print }' "$TEST_FILE" > "$TEST_FILE.tmp.$$" && chmod 600 "$TEST_FILE.tmp.$$" && mv -f "$TEST_FILE.tmp.$$" "$TEST_FILE"
+    [ ! -e "$TEST_FILE.tmp.$$" ] || rm -f "$TEST_FILE.tmp.$$"
 }
 
 # poll rows: s=address|handshake ms|ping ms|status|age s|names

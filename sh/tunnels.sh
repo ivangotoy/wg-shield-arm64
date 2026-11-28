@@ -393,6 +393,8 @@ tun_import_one() {
     what=imported; [ -f "$dst" ] && what=replaced
     # a copy that failed midway holds (part of) the private key: removed
     ( umask 077; cp -f "$src" "$dst.tmp.$$" ) && chmod 600 "$dst.tmp.$$" && mv -f "$dst.tmp.$$" "$dst" || { rm -f "$dst.tmp.$$"; printf '%s\n' "skipped=$base reason=cannot-write"; return 1; }
+    # a speed test result of another server address is not this tunnel's (sh/speed.sh)
+    if command -v test_moved >/dev/null 2>&1; then test_moved "$name" "$T_EPIP"; fi
     echo "$what=$name endpoint=$T_EP type=$T_TYPE${T_WARN:+ notes=$(echo "$T_WARN" | tr ' ' ';')}"
     wlog INFO "tunnel $name $what (endpoint $T_EP, $T_TYPE)${T_WARN:+ - notes: $T_WARN}"
     return 0
