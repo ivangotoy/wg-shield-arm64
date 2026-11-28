@@ -1,6 +1,6 @@
 {
-  "version": "2.9.4-ci9",
-  "versionCode": 25,
-  "zipUrl": "https://git.digtvbg.com/ivangotoy/wg-shield-arm64/releases/download/v2.9.4-ci9/wg-shield-arm64-v2.9.4-ci9.zip",
-  "changelog": "https://git.digtvbg.com/ivangotoy/wg-shield-arm64/raw/commit/3b343f9e11c43ad30b701a4ad8a7f3a6c390d640/CHANGELOG.md"
+  "version": "2.9.4-ci10",
+  "versionCode": 26,
+  "zipUrl": "https://git.digtvbg.com/ivangotoy/wg-shield-arm64/releases/download/v2.9.4-ci10/wg-shield-arm64-v2.9.4-ci10.zip",
+  "changelog": "https://git.digtvbg.com/ivangotoy/wg-shield-arm64/raw/commit/3229aaaffdfcf0583f0233a09d69d99f76f2b2e6/CHANGELOG.md"
 }
