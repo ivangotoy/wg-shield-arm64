@@ -377,7 +377,11 @@ gpay_rules() {
     _gu=$(gpay_uid); [ -n "$_gu" ] || { unset _gu; return 0; }
     # IPv6: 1 around the tunnel, 2 unreachable (see above), 0 none
     _g6=0; if gpay_net6; then _g6=1; elif [ "$V6ON" = 1 ]; then _g6=2; fi
-    GPAY_W=$(awk -v u="$_gu" -v t="$DEFN" -v s="$_g6" '
+    # only the addresses seen in the last GPAY_KEEP s: gpay_refresh drops the
+    # older ones from the file only when it looks up, and nothing is looked
+    # up while the tunnel is not up or the screen is off (Battery)
+    GPAY_W=$(awk -v u="$_gu" -v t="$DEFN" -v s="$_g6" -v n="$(mono_now)" -v k="$GPAY_KEEP" '
+        NF != 3 || $3 < n - k { next }
         $1 == 4 { print "-4 rule add pref 5015 iif lo uidrange " u "-" u " to " $2 "/32 lookup " t }
         $1 == 6 && s == 1 { print "-6 rule add pref 5015 iif lo uidrange " u "-" u " to " $2 "/128 lookup " t }
         $1 == 6 && s == 2 { print "-6 rule add pref 5015 iif lo uidrange " u "-" u " to " $2 "/128 unreachable" }' "$STATE/gpay" 2>/dev/null)

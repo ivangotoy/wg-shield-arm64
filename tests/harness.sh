@@ -2033,6 +2033,19 @@ EOF
     check "off: no IPv6 rule" "1 0" "$b $(r15v6)"
     ip -6 addr del fd11::50/64 dev wlan0 2>/dev/null
     echo 1 > "$WGS_PROC6/all/disable_ipv6"
+    # an address not seen for the whole window (100 s here) while no lookup can
+    # run - the tunnel down (kill switch), the screen off (Battery): its rule goes
+    reset_state; : > "$RUN/gp.calls"; echo 192.0.2.10 > "$RUN/gp4"; export WGS_PM="$FAKES/pm-gms"
+    ctl import wg-GP-1.conf >/dev/null; date +%s > "$STATE/fake_hs"; ctl up wg-GP-1 >/dev/null
+    b="$(r15)"; now=$(cut -d. -f1 /proc/uptime)
+    sed -i "s/^4 192.0.2.10 .*/4 192.0.2.10 $((now - 200))/" "$STATE/gpay"
+    echo $(( $(date +%s) - 400 )) > "$STATE/fake_hs"; ctl status >/dev/null
+    b="$b $([ "$(st state)" = up ] && echo up || echo notup) $(r15)"
+    echo 1 > "$RUN/screen"; date +%s > "$STATE/fake_hs"; c0=$(calls 4); ctl status >/dev/null
+    b="$b $(st state) $(( $(calls 4) - c0 )) $(r15)"
+    echo 2 > "$RUN/screen"; ctl status >/dev/null
+    check "address older than the window: its rule gone while down and with the screen off (no lookup), back with the next lookup" "1 notup 0 up 0 0 1 wlan0" "$b $(r15) $(gms 192.0.2.10)"
+    ctl down >/dev/null
     export WGS_PM="$FAKES/pm" WGS_PING="$FAKES/ping" WGS_GETPROP="$FAKES/getprop"
     unset WGS_PING6 WGS_GPAY_KEEP
     else

@@ -29,6 +29,7 @@ One phone Back leaves Help.
 ### Fork fixes after 2.9.4-ci9
 
 * **No rule of a killed host-name lookup stays behind** - while a host-name server is looked up, rule 5001 sends root's DNS query (port 53) to that resolver around the tunnel for a moment. A lookup whose processes were all killed midway (a speed test stopped hard, for example) left the rule in place for as long as the tunnel stayed on, and the rules check warned about it. The next check now removes it
+* **Google Pay: the 24-hour window also holds while no lookup runs** - every address of Google's payment server seen in the last 24 hours keeps its rule 5015, and older ones were meant to lose it. That was checked only when the addresses were looked up, which happens only while the tunnel is up and, with the Battery profile, the screen is on: while the tunnel was down (kill switch) or the screen stayed off, an address not seen for days still went around the tunnel. The window now applies whenever the rules are set
 
 ---
 
