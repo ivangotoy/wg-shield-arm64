@@ -99,8 +99,21 @@ wait_event() {
 capture_new() {
     case "$1" in 16000:*) fast_capture "$1" ;; esac
 }
+# stopped with TERM (ctl.sh restart) in the middle of a tick: what this
+# process has under way goes with it - the Google Pay lookup's ping (_gp,
+# sh/net.sh _gpay_ask), the temp files it writes as <name>.tmp.<pid>,
+# rules.batch.<pid>.*, fast.<pid>* and setconf.<pid> (a copy of the private
+# key), and the lock. Globbing back on first: the tick may be in tun_parse
+_gp=""
+wd_stop() {
+    set +f
+    [ -n "$_gp" ] && kill "$_gp" 2>/dev/null
+    rm -rf "$STATE"/*.tmp."$$" "$STATE"/rules.batch."$$".* "$STATE"/fast."$$" "$STATE"/fast."$$".* \
+           "$STATE"/setconf."$$" "$CONF".tmp."$$" "$MODDIR"/module.prop.tmp."$$" "$LEGACY_STATE"/status.tmp."$$" 2>/dev/null
+    lock_release
+}
 trap 'mon_stop' EXIT
-trap 'mon_stop; exit 0' TERM INT
+trap 'wd_stop; mon_stop; exit 0' TERM INT
 
 n=0
 while :; do
