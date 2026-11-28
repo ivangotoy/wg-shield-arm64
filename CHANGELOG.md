@@ -26,6 +26,10 @@ One phone Back leaves Help.
 * **Speed test: two tests started at the same moment no longer run together** - a second test (the WebUI and `ctl.sh test` at once) that came in the instant after the first one had taken the test lock, before it had written its process id there, took the lock over, and both used the test interface and rules. Such a lock now counts as busy; one left like that for 30 s is taken over as before
 * **Help and README: what Google Pay around the tunnel sends outside the tunnel** - the texts said only Play services' connections to "that one server" go around the tunnel and that only Android's network check and the login page ever go out on the network itself. The rule works by address, so Play services' connections to another Google service on one of those addresses go the same way; it stays while the kill switch blocks; on an IPv6 tunnel over a network without IPv6, Play services' IPv6 to those addresses is refused so it takes IPv4; and the lookup pings once a minute also with *Check every: Off*. Help (rule 5015, the setting, its command, the files list), the WebUI row and the README now say so
 
+### Fork fixes after 2.9.4-ci9
+
+* **No rule of a killed host-name lookup stays behind** - while a host-name server is looked up, rule 5001 sends root's DNS query (port 53) to that resolver around the tunnel for a moment. A lookup whose processes were all killed midway (a speed test stopped hard, for example) left the rule in place for as long as the tunnel stayed on, and the rules check warned about it. The next check now removes it
+
 ---
 
 ## 2.9.3

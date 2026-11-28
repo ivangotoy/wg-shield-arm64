@@ -451,6 +451,11 @@ ip_batch() {
 # what fast_capture put in since.
 rules_apply() {
     rm -f "$STATE/rules.dirty"
+    # rule 5001 exists only while resolve_host runs, under the lock we hold
+    # (its own lookup removed it again): one here was left by a lookup whose
+    # processes were killed, and nothing else ever removes it while a tunnel
+    # is on - root's DNS to that resolver would keep going around the tunnel
+    while "$IP" rule del pref 5001 2>/dev/null; do :; done
     _b="$STATE/rules.batch.$$"
     rules_want "$1" > "$_b.new"
     [ -f "$STATE/rules.fast" ] && mv -f "$STATE/rules.fast" "$_b.fast"

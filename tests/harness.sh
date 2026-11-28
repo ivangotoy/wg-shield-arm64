@@ -3007,6 +3007,27 @@ PY
     check "workflow: checkout and build use the dispatched commit after main moved" ok "$(wf_dispatched > "$RUN/workflow.out" 2>&1 && echo ok || echo "failed: $(tr '\n' ' ' < "$RUN/workflow.out")")"
 fi
 
+if want stale5001; then
+    echo "stale5001: a host-name lookup killed midway (the speed test's process group) leaves no rule 5001 while a tunnel is up"
+    reset_state
+    conf "$WGS_DL/wg-SR-1.conf" 203.0.113.131:51820
+    conf "$WGS_DL/wg-SR-2.conf" vpn.example.com:51820
+    ctl import wg-SR-1.conf >/dev/null; ctl import wg-SR-2.conf >/dev/null
+    date +%s > "$STATE/fake_hs"
+    ctl up wg-SR-1 >/dev/null
+    # busybox whose nslookup kills its whole process group: the test, started
+    # in a session of its own, dies with rule 5001 in place
+    # shellcheck disable=SC2016 # the fake's own variables
+    printf '#!/bin/sh\ncase "$1" in timeout) shift 2; exec "$@" ;; nslookup) kill -9 0 ;; *) exit 127 ;; esac\n' > "$FAKES/bbk"
+    chmod 755 "$FAKES/bbk"
+    # shellcheck disable=SC2086 # TSH may be "busybox sh"
+    WGS_BB="$FAKES/bbk" WGS_TEST_HS_MAX=2 setsid -w $TSH "$MOD/ctl.sh" test SR >/dev/null 2>&1
+    b=$(ip rule | grep -c '^5001:')
+    ctl status >/dev/null; ctl status >/dev/null
+    check "killed lookup: its rule 5001 there, gone after the next tick, traffic still in the tunnel" "1 0 wgs0" "$b $(ip rule | grep -c '^5001:') $(route_of)"
+    ctl down >/dev/null
+fi
+
 echo
 echo "passed $PASS, failed $FAILN"
 [ "$FAILN" = 0 ]
