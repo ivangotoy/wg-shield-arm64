@@ -376,6 +376,10 @@
         <div class="rn"><b>LAN DNS through the tunnel</b><span>On: while the tunnel is up, name lookups sent to a resolver on your Wi-Fi (the router) go to the tunnel's DNS too, so the router does not see them. Names only the router knows (printer.lan) stop resolving. While the tunnel is connecting or down the router is asked again and sees those lookups - a login page (hotel, airport) needs that. Off (default): the router's resolver is asked directly. Nothing changes while DNSCrypt Proxy answers DNS.</span></div>
         <label class="sw" id="sw-ld"><input type="checkbox" id="cb-ld" onchange="setOpt(this, 'landns', 'LAN DNS through the tunnel')"><i></i></label>
       </div>
+      <div class="row">
+        <div class="rn"><b>Google Pay around the tunnel</b><span>On (default): Google Pay works while the tunnel is on. Google's payment server refuses payments that come from the tunnel's server, so Google Play services' connections to that server's addresses go out on your Wi-Fi or mobile data directly - by address, so another Google service of Play services on one of them goes the same way - also while the kill switch blocks. The addresses are looked up by themselves once a minute, with a ping through the tunnel per lookup (with the Battery profile only while the screen is on), also with Check every: Off. Other apps stay in the tunnel. Off: Play services goes through the tunnel too, and adding a card or money with Google Pay can fail.</span></div>
+        <label class="sw" id="sw-gp"><input type="checkbox" id="cb-gp" onchange="setOpt(this, 'gpay', 'Google Pay around the tunnel')"><i></i></label>
+      </div>
       <div class="row col">
         <div class="rn"><b>Checks</b><span id="prof-note"></span></div>
         <div class="seg" id="prof-seg">
@@ -837,8 +841,12 @@ async function runTest(b) {
   const box = TUN_SEL === 'fav' ? 'favorites' : TUN_SEL === 'oth' ? 'others' : TUN_SEL;
   if (!box) return;
   _testing = true; b.disabled = true; b.textContent = 'Testing…';
+  // as long as the box can take: per tunnel of it (every type, as the module
+  // counts them) a wait for the lock and a lookup of a host name (20 s + 18 s)
+  // and about 16 s to measure - at least 5 minutes
+  const n = (ST.t || []).map(l => String(l).split('|')).filter(f => box === 'favorites' ? f[6] === '1' : box === 'others' ? !tunCountry(f[0]) : tunCountry(f[0]) === box).length;
   try {
-    const r = parseKV(await ctl('test ' + q(box), 300000));
+    const r = parseKV(await ctl('test ' + q(box), Math.max(300000, 60000 + 60000 * n)));
     if (r.ok === '1') toast(`Tested ${num(r.addresses)} server ${num(r.addresses) === 1 ? 'address' : 'addresses'} (${num(r.tunnels)} tunnels)`, 'ok');
     else toast(r.error || 'Test failed', 'err');
   } finally { _testing = false; _tunSig = ''; await poll(); }
@@ -952,13 +960,14 @@ function renderSettings(st) {
   if (!$('sw-nt').classList.contains('busy')) $('cb-nt').checked = st.notify !== '0';
   if (!$('sw-ld').classList.contains('busy')) $('cb-ld').checked = st.landns === '1';
   if (!$('sw-ke').classList.contains('busy')) $('cb-ke').checked = st.ks_error === '1';
+  if (!$('sw-gp').classList.contains('busy')) $('cb-gp').checked = st.gpay !== '0';
   const prof = st.profile === 'always' ? 'always' : 'battery';
   document.querySelectorAll('#prof-seg button').forEach(b => b.classList.toggle('on', b.dataset.p === prof));
   const chk = st.checks === '5' || st.checks === 'off' ? st.checks : '30';
   if (document.activeElement !== $('chk-sel')) $('chk-sel').value = chk;
   $('chk-note').textContent = CHECKS_NOTE[chk];
   $('prof-seg').classList.toggle('off', chk === 'off');
-  $('prof-note').textContent = chk === 'off' ? 'Nothing is pinged (Check every: Off), so there is nothing to pause with the screen off.' : PROFILE_NOTE[prof].replace('{N}', chk);
+  $('prof-note').textContent = chk === 'off' ? 'Nothing is pinged to check the tunnel (Check every: Off). Only the Google Pay lookup, when it is on, still follows this profile.' : PROFILE_NOTE[prof].replace('{N}', chk);
   const paused = st.state === 'paused' && st.reason === 'user';
   $('resume-row').classList.toggle('hidden', !paused);
   $('pause-note').textContent = paused ? fmtDur(st.pause_left) + ' left' : (st.active ? '' : 'tunnel is off');
@@ -1135,7 +1144,7 @@ const PROFILE_NOTE = {
 const CHECKS_NOTE = {
   '5': 'A ping through the tunnel every 5 s (720 an hour, about 200 KB). A dead tunnel is found in about 10 seconds.',
   '30': 'A ping through the tunnel every 30 s (120 an hour, about 35 KB). A dead tunnel is found in about 40 seconds. Default.',
-  off: 'No pings at all. Only WireGuard itself watches the tunnel: a dead one is found within 3 minutes. The self-healing and the notification still work, just later.',
+  off: 'No pings at all to check the tunnel (Google Pay around the tunnel still pings once a minute to look its server up). Only WireGuard itself watches the tunnel: a dead one is found within 3 minutes. The self-healing and the notification still work, just later.',
 };
 async function setChecks(sel) {
   const v = sel.value; sel.disabled = true;

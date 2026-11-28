@@ -39,15 +39,16 @@ Android sees no VPN - no key icon, no `VpnService`, nothing an app can detect or
 - **Self-healing** - the tunnel is pinged through itself every 30 s (or 5 s); no answer = noticed within about 40 s (10 s with 5 s), not after WireGuard's 3 minutes. It is restarted twice at once, and with **Auto-switch** on, your other tunnels are tried - the same country first (`wg-BG-14` → other BG tunnels), then any other, never one on a server address that already failed, the fastest by the last speed test first. The kill switch holds the whole time
 - **One notification** when the tunnel could not be fixed (or after a switch to another tunnel), saying what was tried - you learn you have no internet without opening the manager
 - **Checks profile: Battery or Always** - Battery (default) checks only while the screen is on and checks at once when it comes on; Always checks day and night (hotspot devices, background apps)
-- **Check every: 5 s, 30 s or Off** - how often the tunnel is pinged (30 s by default); Off sends no pings at all and leaves it to WireGuard's 3-minute rule
+- **Check every: 5 s, 30 s or Off** - how often the tunnel is pinged (30 s by default); Off sends no check pings and leaves it to WireGuard's 3-minute rule (Google Pay's address lookup still pings, see below)
 - **Restart WG Shield** - one button (or `ctl.sh restart`) restarts the watchdog and rebuilds the tunnel when something looks stuck, without a reboot; the kill switch holds meanwhile
 - **Your choice is not a failure** - turn the tunnel off or pause it (15 min / 1 h / 4 h) and the phone simply uses your connection
 - **IPv4 and IPv6** - a tunnel with an IPv6 address and `::/0` carries IPv6 too; one without blocks IPv6 while it is on, so nothing goes around it
 - **Wi-Fi ↔ mobile data** - followed the moment Android switches: the watchdog watches Android's network rules and acts at once, not on its next check
-- **Every internet network, not only the current one** - mobile data kept up in the background while you are on Wi-Fi, a Wi-Fi Android is still checking: whatever an app or Android sends over them goes through the tunnel too. A new network is caught the moment Android creates it. Only Android's own network check and the login page of a hotel / airport Wi-Fi go out on the network itself, so a broken Wi-Fi is never taken for a working one and a login page can open
+- **Every internet network, not only the current one** - mobile data kept up in the background while you are on Wi-Fi, a Wi-Fi Android is still checking: whatever an app or Android sends over them goes through the tunnel too. A new network is caught the moment Android creates it. Only Android's own network check and the login page of a hotel / airport Wi-Fi go out on the network itself, so a broken Wi-Fi is never taken for a working one and a login page can open (and Google Pay's server for Play services, see below)
 - **Host-name endpoints** - a home server on dynamic DNS works; the name is looked up again if the tunnel stops answering
 - **IPv6 endpoints** - a server address written as `[2001:db8::1]:51820` works on a network that has IPv6
 - **LAN DNS through the tunnel** (opt-in) - while the tunnel is up, lookups sent to a resolver on your Wi-Fi (the router) go to the tunnel's DNS too, so the router does not see them
+- **Google Pay works with the tunnel on** (Settings, on by default; `ctl.sh set gpay 0`) - Google's payment server refuses payments that come from a VPN server, so Google Play services' connections to that server's addresses (`payments-pa.googleapis.com`) go out on your Wi-Fi or mobile data directly (rule 5015) - by address, so a connection of Play services to another Google service on one of those addresses (Google may serve several from them) goes the same way. Other apps, and the rest of what Play services sends, stay in the tunnel. The rule stays while the kill switch blocks, for the addresses seen in the last 24 hours. The addresses are looked up by themselves through Android's own resolver, with a ping through the tunnel per lookup (IPv4, and IPv6 when the network or the tunnel has it): when the tunnel comes up, when the network changes and once a minute (with the Battery profile only while the screen is on; also with *Check every: Off*). When the tunnel carries IPv6 and the network has none, Play services' IPv6 to those addresses is refused instead, so it takes IPv4
 - **Steps aside for VPN apps** - connect WireGuard, Proton VPN or v2rayNG and WG Shield pauses itself, until that VPN disconnects
 - **Local stays local** - your Wi-Fi LAN (router, printer, SSH from a laptop) and hotspot devices are reached directly
 - **Private keys stay private** - stored root-only, never shown in the WebUI, the log, the status or the report (the same for AmneziaWG's `HeaderProtectionKey`)
@@ -72,8 +73,10 @@ your Wi-Fi or mobile network → VPN server → internet
 | Rule | What for |
 |---|---|
 | 5000 | The tunnel's own encrypted packets to the server go out through your network |
+| 5001 | Only while a host-name server is looked up (a few seconds): root's DNS query to the resolver goes out through your network |
 | 5010–5013 | Local destinations stay local: Wi-Fi LAN, hotspot devices, the local range of every other network |
 | 5014 | Android's own network check (NetworkStack) and the captive portal login page stay on the network they are for |
+| 5015 | Google Pay: Google Play services' connections to the addresses of Google's payment server go out through your network (setting *Google Pay around the tunnel*); also while the kill switch blocks |
 | 5020 | Everything not bound to one network → the tunnel |
 | 5021 | Everything bound to the current default network → the tunnel |
 | 5022 | Everything bound to another internet network (mobile data in the background, a Wi-Fi not yet in use) → the tunnel |
@@ -123,7 +126,7 @@ Tunnels and settings are kept on update.
 |---|---|
 | Dashboard | Route strip · exit address (tap **Check**) · tunnel: type, server, handshake, traffic, IPv6, network, the other networks · the networking set · watchdog |
 | Tunnels | Country boxes (+ Favorites, Others) · WireGuard / AmneziaWG filter · every tunnel with a switch (one at a time), ★, an **AWG** badge for AmneziaWG tunnels, and **✕**; the tunnel that is on at the top (green pulsing dot on its box) · **Clear all** deletes every tunnel at once · **Backup** / **Restore** / delete the backup · **Test** a box: results grouped by server address, fastest marked · import from Download, delete the export |
-| Settings | Kill switch · Kill switch on error · LAN DNS through the tunnel · checks profile (Battery / Always) · check every 5 s / 30 s / off · Auto-switch on failure · Notification + test · pause 15 min / 1 h / 4 h, resume · Check now · Report (no keys) · Restart |
+| Settings | Kill switch · Kill switch on error · LAN DNS through the tunnel · Google Pay around the tunnel · checks profile (Battery / Always) · check every 5 s / 30 s / off · Auto-switch on failure · Notification + test · pause 15 min / 1 h / 4 h, resume · Check now · Report (no keys) · Restart |
 | Log | Filterable by level |
 
 ---
@@ -191,7 +194,7 @@ internet
 | Path | |
 |---|---|
 | `/data/adb/wg-shield/` | Everything the module keeps, in one folder: |
-| `  settings.conf` | Settings: active and last tunnel, kill switch, checks profile and interval, auto-switch, notification, LAN DNS through the tunnel, kill switch on error |
+| `  settings.conf` | Settings: active and last tunnel, kill switch, checks profile and interval, auto-switch, notification, LAN DNS through the tunnel, kill switch on error, Google Pay around the tunnel |
 | `  tunnels/` | Imported tunnels with their keys, root only (`0600`) |
 | `  favorites` | Favorite tunnel names, one per line |
 | `  speedtest` | Last speed test result per server address (the auto-switch order uses it) |
@@ -217,6 +220,7 @@ profile=battery|always  checks=5|30|off   autoswitch=0|1    notify=0|1
 dns=tunnel|dnscrypt|network  dns_server=<the tunnel's DNS in use, IPv4 [IPv6]>
 landns=0|1          dns_lan=<interfaces whose DNS goes to the tunnel's DNS too, empty when none>
 ks_error=0|1        (1 and killswitch=1: state=error blocks traffic like state=down)
+gpay=0|1            (1: Play services reaches Google's payment server around the tunnel)
 ```
 
 ---
@@ -241,6 +245,7 @@ su -c '/system/bin/sh /data/adb/modules/wg-shield/ctl.sh set checks 5|30|off'
 su -c '/system/bin/sh /data/adb/modules/wg-shield/ctl.sh set autoswitch 0|1'
 su -c '/system/bin/sh /data/adb/modules/wg-shield/ctl.sh set notify 0|1'
 su -c '/system/bin/sh /data/adb/modules/wg-shield/ctl.sh set landns 0|1'   # LAN DNS through the tunnel
+su -c '/system/bin/sh /data/adb/modules/wg-shield/ctl.sh set gpay 0|1'   # Google Pay around the tunnel (on by default)
 su -c '/system/bin/sh /data/adb/modules/wg-shield/ctl.sh notifytest'   # how the notification looks
 su -c '/system/bin/sh /data/adb/modules/wg-shield/ctl.sh restart'   # watchdog + tunnel again
 su -c '/system/bin/sh /data/adb/modules/wg-shield/ctl.sh remove <name>'
@@ -277,7 +282,7 @@ Within about 40 seconds (10 with Check every 5 s) the banner shows *restart 1 of
 ## Notes
 
 - **The ping** goes through the tunnel only (bound to `wgs0`, to 1.1.1.1 / 8.8.8.8), so it shows nothing new to your network. A server that never answers a ping is not called dead for that - for such a tunnel WireGuard's own 180 s rule decides
-- **The speed test** sends, per server address, one WireGuard handshake and a few pings to 1.1.1.1 through that server - nothing outside a tunnel. A server can take a few seconds before it answers a key it has not seen for a while; the test waits up to 10 seconds for the answers
+- **The speed test** sends, per server address, one WireGuard handshake and a few pings to 1.1.1.1 through that server - nothing outside a tunnel, except the plain DNS lookup of a host-name server (the same one as when such a tunnel starts). A server can take a few seconds before it answers a key it has not seen for a while; the test waits up to 10 seconds for the answers
 - **Notifications** are posted through Android's shell, so they appear as *Shell* / *Command line*; HyperOS shows them when the screen comes on
 - **IPv6 endpoints** - `Endpoint = [2001:db8::1]:51820` (brackets, no zone like `%wlan0`). The tunnel's own packets get their way out in the IPv6 rules (rule 5000 there), everything else in IPv6 stays blocked or in the tunnel as before. The network the phone is on needs IPv6: on a network without an IPv6 route, or with IPv6 off for the whole phone, the state is *Error* (`endpoint_needs_ipv6`, direct connection - or no internet with *Kill switch on error*), and the tunnel comes up by itself on a network that has IPv6. The status and the speed test show the address the way the system lists it (`2001:0DB8:0:0:0:0:0:1` as `2001:db8::1`). A host name is always looked up as an IPv4 address
 - **Host-name endpoints** are looked up with one plain DNS query outside the tunnel to Cloudflare (`1.1.1.1`, `1.0.0.1`), then Google (`8.8.8.8`) (the tunnel is not up yet); the same resolvers DNSCrypt Proxy lets root query directly

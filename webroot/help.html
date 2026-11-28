@@ -157,18 +157,21 @@
   <div class="tw"><table>
     <tr class="th-row"><th>rule</th><th>what for</th></tr>
     <tr><td>5000</td><td>The tunnel's own encrypted packets to the server go out through your network.</td></tr>
+    <tr><td>5001</td><td>Only while a host-name server is looked up (a few seconds): root's DNS query to the resolver goes out through your network (see 9).</td></tr>
     <tr><td>5010–5013</td><td>Local destinations stay local: your Wi-Fi LAN (router, printer, SSH from a laptop), hotspot devices, the local range of every other network.</td></tr>
     <tr><td>5014</td><td>Android's own network check and the hotel / airport login page stay on the network they are for.</td></tr>
+    <tr><td>5015</td><td>Google Pay: Google Play services' connections to the addresses of Google's payment server go out on your network, because that server refuses payments from a VPN server - also while the kill switch blocks (see 7). Off in Settings, or <code>ctl.sh set gpay 0</code>.</td></tr>
     <tr><td>5020</td><td>Everything not bound to one network → the tunnel.</td></tr>
     <tr><td>5021</td><td>Everything bound to the current default network (Wi-Fi or mobile) → the tunnel.</td></tr>
     <tr><td>5022</td><td>Everything bound to another internet network → the tunnel.</td></tr>
   </table></div>
   <h3>Every network</h3>
   <p>Android keeps more than one network up: on Wi-Fi, mobile data usually stays connected in the background, and a new Wi-Fi is up for a few seconds before Android uses it. Apps and parts of Android can send traffic over such a network on purpose (Google's push service, for example, connects over a new Wi-Fi a split second after it appears). WG Shield sends that traffic through the tunnel too: a new network is caught the moment Android creates it.</p>
-  <p>Two things always go out on the network itself, never through the tunnel:</p>
+  <p>These always go out on the network itself, never through the tunnel:</p>
   <ul>
     <li><strong>Android's network check</strong> (a request to <code>connectivitycheck.gstatic.com/generate_204</code> and similar). Through the tunnel it would always succeed, and Android would take a broken Wi-Fi for a working one.</li>
     <li><strong>The login page of a hotel or airport Wi-Fi</strong> (Android's captive portal login). It can only open on that Wi-Fi.</li>
+    <li><strong>Google Pay's server</strong>, for Google Play services only, while <em>Google Pay around the tunnel</em> is on (see 7).</li>
   </ul>
   <p>Carrier service networks keep Android's routing - that is how IMS (VoLTE, Wi-Fi calling) and MMS keep working. Restricted networks (IMS and the like) are never touched; a network without internet (MMS only) is let go after one look at Android's network list. Dashboard → Tunnel → <strong>Other networks</strong> shows what goes where.</p>
   <h3>Watchdog</h3>
@@ -202,7 +205,7 @@
   <h3>Tunnel</h3>
   <p>The active tunnel, its type (WireGuard or AmneziaWG, with the kernel's AmneziaWG version), its server, the last handshake, data received and sent, and which network carries the tunnel. <strong>Other networks</strong>: the networks that are up besides that one - internet ones go through the tunnel (also while Android is still checking them), carrier service networks stay outside. <strong>Self-healing</strong>: ready, or the step it is on right now (see 7).</p>
   <h3>Networking set</h3>
-  <p>Whether DNSCrypt Proxy, ipset and VPN Hotspot are installed and what they are doing (see 8).</p>
+  <p>Whether DNSCrypt Proxy, ipset, VPN Hotspot and LAN Cloak are installed and what they are doing (see 8).</p>
 </div>
 
 <div class="sec-title" id="tunnels">6 · tunnels, countries, favorites, speed test, backup, import, amneziawg</div>
@@ -220,7 +223,7 @@
   <p>Pick a box and tap <strong>Test</strong>. WG Shield measures every <strong>server address</strong> in the box once: how long the first handshake takes ("connects in") and the average of 3 pings through the tunnel to 1.1.1.1. A line shows which server is being tested; it takes a few seconds per address. Nothing is switched: the rows are then grouped by server address, the fastest first and marked, and you pick. Every row shows its time, and each group says how old its result is.</p>
   <p>Why per address: a VPN provider runs several "servers" on one machine. With Proton, <code>BG-14</code>, <code>BG-18</code>, <code>BG-20</code> and <code>BG-24</code> can all connect to the same address (the <em>Server</em> on the Dashboard) and leave through different exit addresses (the <em>Internet</em> address). They are as fast as each other and they usually fail together, so one measurement counts for the whole group. They are not duplicates - a different exit address can help when a site blocks one - but for a backup, keep tunnels on <strong>different server addresses</strong>.</p>
   <p>How it measures without touching your connection: each address gets a second, temporary tunnel interface next to the running one, with one tunnel of that address; only the test's own packets use it, and it is removed right after (also if the test is stopped). The tunnel that is on keeps running and the kill switch keeps working; the address of the tunnel that is on is measured through it (ping only). A tunnel with the same key as the one that is on is never loaded twice (the server would drop one of them); another tunnel of that address is used, or the group says it was not tested.</p>
-  <p>Results: <em>no handshake</em> = the server did not answer at all; <em>no answer through it</em> = it connected but carried nothing. Results are kept (also after a reboot) until the next test of that box, and Auto-switch uses them (section 7).</p>
+  <p>Results: <em>no handshake</em> = the server did not answer at all; <em>no answer through it</em> = it connected but carried nothing. Results are kept (also after a reboot) until the next test of that box, and Auto-switch uses them (section 7). A tunnel imported again with another server address loses the result of the old address.</p>
   <h3>Clear all</h3>
   <p><strong>Clear all</strong>, at the right above the boxes, deletes every imported tunnel at once (with their keys and stars) instead of one ✕ at a time - for example before importing a fresh export. Tap it twice to confirm. The tunnel that was on turns off: your normal connection, no kill switch, until you import and switch one on again. Speed test results are kept.</p>
   <h3>Backup and restore</h3>
@@ -256,6 +259,9 @@
     <li>Nothing is done while DNSCrypt Proxy answers the phone's DNS; a tunnel without a <code>DNS</code> line has nothing to redirect to.</li>
   </ul>
   <p>Dashboard → Tunnel → DNS shows <em>tunnel's DNS … + LAN</em> while it is active.</p>
+  <h3>Google Pay around the tunnel</h3>
+  <p><strong>On</strong> (default): Google's payment server (<code>payments-pa.googleapis.com</code>) refuses payments that come from a VPN server, so adding money or a card with Google Pay would fail. Google Play services' connections to that server's addresses go out on your Wi-Fi or mobile data directly (rule 5015) - by address, so a connection of Play services to another Google service on one of those addresses (Google may serve several from them) goes the same way. Other apps, and the rest of what Play services sends, stay in the tunnel. The rule stays while the kill switch blocks (also with <strong>Kill switch on error</strong>), for the addresses seen in the last 24 hours: no lookup runs then, so an address not seen for longer loses its rule.</p>
+  <p>The addresses come from Android's own resolver, with a ping through the tunnel per lookup (IPv4, and IPv6 when the network or the tunnel has it): when the tunnel comes up, when the network changes and once a minute - with the Battery profile only while the screen is on, and also with <strong>Check every: Off</strong>. Every address seen in the last 24 hours is kept (at most 32 per IPv4 / IPv6). When the tunnel carries IPv6 and the network has none, Play services' IPv6 to those addresses is refused instead, so it takes IPv4. <strong>Off</strong>: Play services goes through the tunnel too, and Google Pay can fail.</p>
   <h3>Self-healing</h3>
   <p>Every 30 seconds (or every 5 seconds, see <strong>Check every</strong> below; with the Battery profile only while the screen is on) WG Shield sends one ping through the tunnel (to 1.1.1.1, then 8.8.8.8 - never around it). Only an answer counts: traffic coming in alone does not prove that the way out works. No answer to two tries = the tunnel does not work, noticed within about 40 seconds (10 seconds with 5 s). A server that never answers a ping (some home servers drop it) is not called dead for that - for such a tunnel WireGuard's own 3-minute rule decides. While the phone has a network, WG Shield then fixes it without waiting for you:</p>
   <ol>
@@ -270,7 +276,7 @@
   <ul>
     <li><strong>30 s</strong> (default) - 120 pings an hour, about 35 KB. A dead tunnel is found in about 40 seconds.</li>
     <li><strong>5 s</strong> - 720 pings an hour, about 200 KB. A dead tunnel is found in about 10 seconds. While the phone is otherwise idle on mobile data, the frequent pings keep the modem awake, which costs some battery.</li>
-    <li><strong>Off</strong> - no pings at all. Only WireGuard itself watches the tunnel (no handshake for 3 minutes = down), which sends nothing extra. The self-healing and the notification still work, they just start later. Battery / Always has no effect then.</li>
+    <li><strong>Off</strong> - no pings at all to check the tunnel (<em>Google Pay around the tunnel</em> still pings once a minute to look its server up). Only WireGuard itself watches the tunnel (no handshake for 3 minutes = down), which sends nothing extra. The self-healing and the notification still work, they just start later. Battery / Always then only decides when the Google Pay lookup runs.</li>
   </ul>
   <p>A ping is tiny, and it goes through the tunnel: the resolver it is sent to sees the VPN server's address, not yours. A recovery that has started checks every few seconds, whatever is set here, so its steps can tell at once whether they worked. A network change checks at once too.</p>
   <h3>Checks: Battery or Always</h3>
@@ -314,7 +320,7 @@
     <li><strong>Host-name endpoints</strong> (e.g. a home server on dynamic DNS) are looked up when the tunnel starts, with one plain DNS query sent outside the tunnel to Cloudflare (<code>1.1.1.1</code>, <code>1.0.0.1</code>), then Google (<code>8.8.8.8</code>) - before the tunnel is up there is no other way. These are the addresses DNSCrypt Proxy lets root query directly. If such a tunnel stops answering, the name is looked up again (at most once a minute), so an address change at home is followed by itself. A name is always looked up as an IPv4 address; for a server reached over IPv6 write the address itself.</li>
     <li><strong>DNS already under way when the tunnel's DNS changes.</strong> A DNS flow that already exists when the redirect to the tunnel's DNS is turned on or off keeps its old address translation until the kernel forgets it (UDP about 30 s). Android's resolver uses a new port for every query, so new lookups follow at once; Android has no tool to clear only those entries.</li>
     <li><strong>Same LAN on both sides.</strong> Addresses of your own Wi-Fi network always stay local. If a home VPN uses the same range as your Wi-Fi (both <code>192.168.1.x</code>), devices behind that VPN cannot be reached while you are on that Wi-Fi.</li>
-    <li><strong>No per-app bypass.</strong> Everything the phone sends goes through the tunnel, except carrier services (IMS, MMS), Android's network check and the captive portal login page (see 3).</li>
+    <li><strong>No per-app bypass.</strong> Everything the phone sends goes through the tunnel, except carrier services (IMS, MMS), Android's network check and the captive portal login page (see 3), and Play services' connections to Google Pay's server while <em>Google Pay around the tunnel</em> is on (see 7).</li>
     <li><strong>What the network still sees.</strong> Android's network check runs on each new network (a request to Google's <code>generate_204</code>); a VPN cannot hide it without breaking Wi-Fi detection. What the router sees on the local network (DHCP host name, device announcements) is outside a VPN's reach.</li>
     <li><strong>Hotspot devices</strong> are routed by VPN Hotspot, not by WG Shield (see 8); they get IPv4 only.</li>
   </ul>
@@ -339,6 +345,7 @@
 <div class="cmd-row"><div class="cmd-main"><pre>su -c '/<wbr>system/<wbr>bin/<wbr>sh /<wbr>data/<wbr>adb/<wbr>modules/<wbr>wg-shield/<wbr>ctl.sh <span class="sub">set profile battery|always</span>'</pre></div><button class="copy-btn" type="button" onclick="copyCode(this)"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>COPY</button></div>
 <div class="cmd-row"><div class="cmd-main"><pre>su -c '/<wbr>system/<wbr>bin/<wbr>sh /<wbr>data/<wbr>adb/<wbr>modules/<wbr>wg-shield/<wbr>ctl.sh <span class="sub">set checks 5|30|off</span>'</pre></div><button class="copy-btn" type="button" onclick="copyCode(this)"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>COPY</button></div>
 <div class="cmd-row"><div class="cmd-main"><pre>su -c '/<wbr>system/<wbr>bin/<wbr>sh /<wbr>data/<wbr>adb/<wbr>modules/<wbr>wg-shield/<wbr>ctl.sh <span class="sub">set landns 0|1</span>'</pre><div class="cmd-note">LAN DNS through the tunnel</div></div><button class="copy-btn" type="button" onclick="copyCode(this)"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>COPY</button></div>
+<div class="cmd-row"><div class="cmd-main"><pre>su -c '/<wbr>system/<wbr>bin/<wbr>sh /<wbr>data/<wbr>adb/<wbr>modules/<wbr>wg-shield/<wbr>ctl.sh <span class="sub">set gpay 0|1</span>'</pre><div class="cmd-note">Google Pay around the tunnel (on by default)</div></div><button class="copy-btn" type="button" onclick="copyCode(this)"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>COPY</button></div>
 <div class="cmd-row"><div class="cmd-main"><pre>su -c '/<wbr>system/<wbr>bin/<wbr>sh /<wbr>data/<wbr>adb/<wbr>modules/<wbr>wg-shield/<wbr>ctl.sh <span class="sub">restart</span>'</pre><div class="cmd-note">watchdog + tunnel again</div></div><button class="copy-btn" type="button" onclick="copyCode(this)"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>COPY</button></div>
 <div class="cmd-row"><div class="cmd-main"><pre>su -c '/<wbr>system/<wbr>bin/<wbr>sh /<wbr>data/<wbr>adb/<wbr>modules/<wbr>wg-shield/<wbr>ctl.sh <span class="sub">notifytest</span>'</pre></div><button class="copy-btn" type="button" onclick="copyCode(this)"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>COPY</button></div>
 <div class="cmd-row"><div class="cmd-main"><pre>su -c '/<wbr>system/<wbr>bin/<wbr>sh /<wbr>data/<wbr>adb/<wbr>modules/<wbr>wg-shield/<wbr>ctl.sh <span class="sub">remove &lt;name&gt;</span>'</pre></div><button class="copy-btn" type="button" onclick="copyCode(this)"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>COPY</button></div>
@@ -360,7 +367,7 @@
   <h3>No internet</h3>
   <p>State <span class="pill bad">down</span>? The server does not answer, the restarts (and auto-switch, if on) did not help, and the kill switch holds. Switch to another tunnel, or pause. Stays <span class="pill warn">connecting</span>? Check the server is not blocked by ipset (see 8), then send the <strong>Report</strong>.</p>
   <h3>Something looks stuck</h3>
-  <p>The Dashboard does not change, the watchdog shows <em>stopped</em>, or the tunnel does not come back after the network returned: Settings → Maintenance → <strong>Restart WG Shield</strong> (tap twice). It stops the watchdog, builds the tunnel again with a new connection to the server and starts the watchdog again, in a few seconds and without a reboot. Your tunnel, settings, a pause or "off" stay as they are; the kill switch keeps blocking while it restarts. If it does not help, send the <strong>Report</strong>.</p>
+  <p>The Dashboard does not change, the watchdog's <em>Running</em> shows <em>NO</em>, or the tunnel does not come back after the network returned: Settings → Maintenance → <strong>Restart WG Shield</strong> (tap twice). It stops the watchdog, builds the tunnel again with a new connection to the server and starts the watchdog again, in a few seconds and without a reboot. Your tunnel, settings, a pause or "off" stay as they are; the kill switch keeps blocking while it restarts. If it does not help, send the <strong>Report</strong>.</p>
   <h3>Paused and I did not pause it</h3>
   <p>A VPN app is connected - the banner names it. Disconnect it.</p>
   <h3>Import skipped a tunnel</h3>
@@ -384,7 +391,7 @@
   <div class="tw"><table>
     <tr class="th-row"><th>file</th><th></th></tr>
     <tr><td>/data/adb/wg-shield/</td><td>Everything the module keeps, in one folder:</td></tr>
-    <tr><td>settings.conf</td><td>Settings: active and last tunnel, kill switch, checks profile and interval, auto-switch, notification, LAN DNS through the tunnel, kill switch on error (kept on update)</td></tr>
+    <tr><td>settings.conf</td><td>Settings: active and last tunnel, kill switch, checks profile and interval, auto-switch, notification, LAN DNS through the tunnel, kill switch on error, Google Pay around the tunnel (kept on update)</td></tr>
     <tr><td>tunnels/</td><td>Imported tunnels with their keys, root only (kept on update)</td></tr>
     <tr><td>favorites</td><td>Favorite tunnel names, one per line (kept on update)</td></tr>
     <tr><td>speedtest</td><td>Last speed test result per server address (kept on update and reboot)</td></tr>
