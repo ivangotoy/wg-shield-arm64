@@ -152,6 +152,21 @@ process.on('exit', () => { if (!asyncDone) { console.log('  FAIL the openExt che
   let exThrew = false;
   try { await vm.runInContext('checkExit', ctx)(); } catch (e) { exThrew = true; }
   check('checkExit: no answer ends "Asking..." with a message, no rejection', !exThrew && /no answer/i.test((els['exit-sub'] || {}).textContent || '') && !/Asking/.test(els['exit-sub'].textContent));
+  // speed test: the page waits for `ctl test` as long as its box can take -
+  // per tunnel of the box (every type, as speed.sh test_in_box counts them)
+  const ctl0 = ctx.ctl, tc = [];
+  ctx.ctl = async (args, ms) => { tc.push([args, ms]); return /^test /.test(args) ? 'ok=1\naddresses=1\ntunnels=1\n' : ''; };
+  const trow = (n, cc, ty) => Array.from({ length: n }, (_, i) => `wg-${cc}-${i + 1}|203.0.113.${i + 1}:51820|10.2.0.2/32|1|0|${ty}|0`);
+  for (const [n, want] of [[2, 300000], [40, 60000 + 60000 * 40]]) {
+    const t = trow(n / 2, 'BG', 'wireguard').concat(trow(n / 2, 'BG', 'amneziawg').map(l => l.replace('wg-BG-', 'awg-BG-')), trow(5, 'NL', 'wireguard'));
+    vm.runInContext(`TUN_SEL = "BG"; TUN_FILT = "wireguard"; ST = ${JSON.stringify({ t })}`, ctx);
+    tc.length = 0;
+    let tThrew = false;
+    try { await vm.runInContext('runTest', ctx)({ disabled: false, textContent: '' }); } catch (e) { tThrew = true; }
+    const c = tc.find(x => /^test /.test(x[0]));
+    check(`speed test of a box of ${n} tunnels (both types): the page waits ${want / 1000} s for it`, !tThrew && !!c && c[0] === "test 'BG'" && c[1] === want);
+  }
+  ctx.ctl = ctl0;
   ctx.document = doc; delete ctx.ksu;
 })().catch(e => check(`openExt checks: no exception (${e && e.message})`, false))
   .finally(() => { asyncDone = true; process.exit(fail ? 1 : 0); });

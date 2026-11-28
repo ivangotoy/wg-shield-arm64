@@ -922,15 +922,45 @@ if want landns6; then
     else
         # "-m mark" as nft's own meta mark (see dns_route: without xt_mark
         # the host's iptables-nft would match everything)
+        # When the host cannot provide a REJECT target (no reject module
+        # loadable, e.g. the running kernel's modules removed by an update
+        # since boot), the REJECT rules go in as nft drop rules tagged with a
+        # comment; when its iptables-nft cannot show a meta mark mask (same
+        # cause: the mark extension unknown to the kernel, shown as /0x0), the
+        # mark rules carry their mask in a comment. The listings (ip6s for the
+        # module, ip6r -S for the cases) show them as the rules they stand
+        # for. Either way the packet does not leave, which the cases measure.
+        _rj=REJECT; _mk=plain
+        if "$IP6R" -w -t filter -N wgs_probe 2>/dev/null; then
+            "$IP6R" -w -t filter -A wgs_probe -p udp --dport 53 -j REJECT 2>/dev/null || _rj=drop
+            nft add rule ip6 filter wgs_probe meta mark and 0xffff == 0x69 return 2>/dev/null
+            [ "$("$IP6R" -w -t filter -S wgs_probe 2>/dev/null | grep -c -- '--mark 0x69/0xffff -j RETURN')" = 1 ] || _mk=tag
+            "$IP6R" -w -t filter -F wgs_probe 2>/dev/null; "$IP6R" -w -t filter -X wgs_probe 2>/dev/null
+        fi
+        _emu=0; [ "$_rj" = REJECT ] && [ "$_mk" = plain ] || _emu=1
+        [ "$_emu" = 0 ] || echo "  note: emulated on this host: REJECT target $_rj, meta mark listing $_mk"
+        cat > "$FAKES/ip6fix.sed" <<'EOF'
+s/ -m mark --mark \(0x[0-9a-f]*\)\/0x0 -m comment --comment "*wgs-harness-mark=\1\/\(0x[0-9a-f]*\)"* -j RETURN$/ -m mark --mark \1\/\2 -j RETURN/
+s/ -m comment --comment "*wgs-harness-REJECT"* -j DROP$/ -j REJECT/
+EOF
         cat > "$FAKES/ip6r" <<EOF
 #!/bin/sh
 case "\$*" in
-    *" -t filter -A "*" -m mark --mark "*" -j RETURN") set -- \$*; exec nft add rule ip6 filter "\$5" meta mark and "\${9#*/}" == "\${9%/*}" return ;;
+    *" -t filter -A "*" -m mark --mark "*" -j RETURN") set -- \$*
+        [ "$_mk" = tag ] && exec nft add rule ip6 filter "\$5" meta mark and "\${9#*/}" == "\${9%/*}" return comment "\"wgs-harness-mark=\$9\""
+        exec nft add rule ip6 filter "\$5" meta mark and "\${9#*/}" == "\${9%/*}" return ;;
+    *" -t filter -A "*" -o "*" -p "*" --dport "*" -j REJECT") [ "$_rj" = drop ] && { set -- \$*; exec nft add rule ip6 filter "\$5" oifname "\$7" "\$9" dport "\${11}" counter drop comment '"wgs-harness-REJECT"'; } ;;
+    *" -S"*) [ "$_emu" = 1 ] && { "$IP6R" "\$@" 2>/dev/null | sed -f "$FAKES/ip6fix.sed"; exit 0; } ;;
 esac
 exec "$IP6R" "\$@"
 EOF
-        chmod 755 "$FAKES/ip6r"
-        r6ctl() { WGS_IPTS6=$(command -v ip6tables-save) WGS_IPT6="$FAKES/ip6r" ctl "$@"; }
+        if [ "$_emu" = 1 ]; then
+            printf '#!/bin/sh\n"%s" "$@" 2>/dev/null | sed -f "%s"\n' "$(command -v ip6tables-save)" "$FAKES/ip6fix.sed" > "$FAKES/ip6s"
+        else
+            printf '#!/bin/sh\nexec "%s" "$@"\n' "$(command -v ip6tables-save)" > "$FAKES/ip6s"
+        fi
+        chmod 755 "$FAKES/ip6r" "$FAKES/ip6s"
+        r6ctl() { WGS_IPTS6="$FAKES/ip6s" WGS_IPT6="$FAKES/ip6r" ctl "$@"; }
         export WGS_IP="$FAKES/ipn"
         reset_state; rm -rf "$WGS_IPT_DIR"
         echo 0 > "$WGS_PROC6/all/disable_ipv6"; mkdir -p "$WGS_PROC6/wgs0"; echo 0 > "$WGS_PROC6/wgs0/disable_ipv6"
@@ -976,7 +1006,7 @@ except OSError:
         # a carrier service network on the Wi-Fi's interface stays outside: its mark RETURNs
         ip rule add pref 16000 fwmark 0xd0069/0xdffff iif lo lookup 1028; ip -6 rule add pref 16000 fwmark 0xd0069/0xdffff iif lo lookup 1028
         r6ctl status >/dev/null
-        check "LAN DNS on: a network that stays outside keeps its IPv6 resolver" "1 wlan0" "$("$IP6R" -w -t filter -S | grep -c -- '--mark 0x69/0xffff -j RETURN') $(q6 fd11::1 0xd0069)"
+        check "LAN DNS on: a network that stays outside keeps its IPv6 resolver" "1 wlan0" "$("$FAKES/ip6r" -w -t filter -S | grep -c -- '--mark 0x69/0xffff -j RETURN') $(q6 fd11::1 0xd0069)"
         ip rule del pref 16000 fwmark 0xd0069/0xdffff iif lo lookup 1028; ip -6 rule del pref 16000 fwmark 0xd0069/0xdffff iif lo lookup 1028
         r6ctl status >/dev/null
         r6ctl set killswitch 0 >/dev/null
@@ -1017,10 +1047,10 @@ exit \$rc
 EOF
         chmod 755 "$FAKES/ip6q"; rm -f "$RUN/midq6.out"; : > "$RUN/midq6.on"
         ip rule add pref 16000 fwmark 0x10068/0x1ffff iif lo lookup 1031
-        WGS_IPTS6=$(command -v ip6tables-save) WGS_IPT6="$FAKES/ip6q" ctl status >/dev/null
+        WGS_IPTS6="$FAKES/ip6s" WGS_IPT6="$FAKES/ip6q" ctl status >/dev/null
         rm -f "$RUN/midq6.on"
         check "rebuild: queries while the old chain went: none reached the router" "yes 0" "$([ -s "$RUN/midq6.out" ] && echo yes || echo no) $(grep -vc '^none$' "$RUN/midq6.out" 2>/dev/null)"
-        check "rebuild: the network Android checks keeps its resolver, one jump" "1 1 none" "$("$IP6R" -w -t filter -S | grep -c -- '--mark 0x68/0xffff -j RETURN') $("$IP6R" -w -t filter -S OUTPUT | grep -c -- '-j wgs_dnsb') $(q6 fd11::1)"
+        check "rebuild: the network Android checks keeps its resolver, one jump" "1 1 none" "$("$FAKES/ip6r" -w -t filter -S | grep -c -- '--mark 0x68/0xffff -j RETURN') $("$IP6R" -w -t filter -S OUTPUT | grep -c -- '-j wgs_dnsb') $(q6 fd11::1)"
         ip rule del pref 16000 fwmark 0x10068/0x1ffff iif lo lookup 1031
         r6ctl status >/dev/null
         # removed by someone else: back at the next tick
@@ -1034,7 +1064,7 @@ EOF
         if [ "$_live" = wgs_dnsb ]; then _gone=wgs_dnsb_n; else _gone=wgs_dnsb; fi
         sed -i "1s/.*/$_gone/" "$STATE/dns6b.want"
         rm -f "$RUN/midq6.out"; : > "$RUN/midq6.on"
-        WGS_IPTS6=$(command -v ip6tables-save) WGS_IPT6="$FAKES/ip6q" ctl status >/dev/null
+        WGS_IPTS6="$FAKES/ip6s" WGS_IPT6="$FAKES/ip6q" ctl status >/dev/null
         rm -f "$RUN/midq6.on"
         check "killed rebuild: the next one lets no query reach the router, one jump" "yes 0 1 none" "$([ -s "$RUN/midq6.out" ] && echo yes || echo no) $(grep -vc '^none$' "$RUN/midq6.out" 2>/dev/null) $("$IP6R" -w -t filter -S OUTPUT | grep -c -- '-j wgs_dnsb') $(q6 fd11::1)"
         r6ctl set landns 0 >/dev/null
@@ -1745,6 +1775,284 @@ EOF
     unset WGS_PROBELOG
 fi
 
+if want gpay; then
+    echo "gpay: only Play services' traffic to Google's payment server goes around the tunnel, addresses from Android's resolver"
+    if [ "${WGS_UIDS:-}" = 1 ]; then
+    reset_state; rm -rf "$WGS_IPT_DIR"
+    # Play services = uid 10123; ping / ping6 answer the payment server's
+    # name with the address in $RUN/gp4 / $RUN/gp6 (as Android's ping prints
+    # it), every call noted in $RUN/gp.calls
+    printf '#!/bin/sh\necho "package:com.android.captiveportallogin uid:10050"\necho "package:com.google.android.gms uid:10123"\necho "package:com.google.android.gms.policy_sidecar_aps uid:10124"\n' > "$FAKES/pm-gms"
+    printf '#!/bin/sh\necho "package:com.android.captiveportallogin uid:10050"\n' > "$FAKES/pm-nogms"
+    cat > "$FAKES/gping" <<EOF
+#!/bin/sh
+for a; do :; done
+[ "\$a" = payments-pa.googleapis.com ] || exit 1
+echo "4 \$*" >> "$RUN/gp.calls"
+[ -s "$RUN/gp4" ] || { echo "ping: unknown host \$a" >&2; exit 2; }
+echo "PING \$a (\$(cat "$RUN/gp4")) from 10.2.0.2 wgs0: 56(84) bytes of data."
+echo; echo "--- \$a ping statistics ---"; echo "1 packets transmitted, 0 received, 100% packet loss, time 0ms"
+exit 1
+EOF
+    cat > "$FAKES/gping6" <<EOF
+#!/bin/sh
+for a; do :; done
+[ "\$a" = payments-pa.googleapis.com ] || exit 1
+echo "6 \$*" >> "$RUN/gp.calls"
+[ -s "$RUN/gp6" ] || exit 2
+# without -n the header names the address by its reverse DNS name
+case " \$* " in *" -n "*) n=\$(cat "$RUN/gp6") ;; *) n=rdns.example ;; esac
+echo "PING \$a(\$n) from fd00::2 wgs0: 56 data bytes"
+exit 1
+EOF
+    cat > "$FAKES/getprop-s" <<EOF
+#!/bin/sh
+case "\$1" in sys.boot_completed) echo 1 ;; debug.tracing.screen_state) cat "$RUN/screen" ;; esac
+EOF
+    chmod 755 "$FAKES/pm-gms" "$FAKES/pm-nogms" "$FAKES/gping" "$FAKES/gping6" "$FAKES/getprop-s"
+    echo 2 > "$RUN/screen"; echo 192.0.2.10 > "$RUN/gp4"; echo 2001:DB8:0:0::10 > "$RUN/gp6"; : > "$RUN/gp.calls"
+    export WGS_PM="$FAKES/pm-gms" WGS_PING="$FAKES/gping" WGS_PING6="$FAKES/gping6" WGS_GETPROP="$FAKES/getprop-s" WGS_GPAY_KEEP=100
+    r15() { ip rule | grep -c '^5015:'; }
+    r15v6() { ip -6 rule | grep -c '^5015:'; }
+    # where a socket of uid U to ADDRESS goes: the interface, or blocked
+    via() { r=$(ip "$@" 2>&1 | head -n 1); case "$r" in *" dev "*) r=${r#* dev }; echo "${r%% *}" ;; *) echo blocked ;; esac; }
+    gms() { via route get "$1" uid 10123; }
+    app() { via route get "$1" uid 10200; }
+    calls() { grep -c "^$1 " "$RUN/gp.calls"; }
+    age() { sed -i 's/^[0-9]* /0 /' "$STATE/gpay_at"; }     # the last lookup long ago
+    logn() { grep -c -- "$1" "$WGS_DATA/logs/wg-shield.log"; }
+    conf "$WGS_DL/wg-GP-1.conf" 203.0.113.101:51820
+    ctl import wg-GP-1.conf >/dev/null
+    date +%s > "$STATE/fake_hs"
+    ctl up wg-GP-1 >/dev/null
+    check "up: on by default, one rule for Play services' uid to the address ping resolved" "up 1 1 1" "$(st state) $(st gpay) $(r15) $(ip rule | grep -c '^5015:.* to 192.0.2.10 .*uidrange 10123-10123 lookup 1028')"
+    check "Play services to the payment server: the Wi-Fi; another app to it: the tunnel" "wlan0 wgs0" "$(gms 192.0.2.10) $(app 192.0.2.10)"
+    check "Play services to anything else: the tunnel" "wgs0 wgs0 wlan0" "$(gms 192.0.2.99) $(gms 1.1.1.1) $(gms 192.0.2.10)"
+    check "resolved through ping bound to wgs0, logged" "1 4 -4 -c 1 -w 1 -I wgs0 payments-pa.googleapis.com 1 1" "$(calls 4) $(head -n 1 "$RUN/gp.calls") $(logn 'payments-pa.googleapis.com is 192.0.2.10') $(logn 'Play services (uid 10123)')"
+    check "no IPv6 on the network: no IPv6 lookup, no IPv6 rule" "1 0 0" "$(calls 4) $(calls 6) $(r15v6)"
+    ctl status >/dev/null; ctl status >/dev/null
+    check "next ticks: not looked up again before the interval, nothing repaired" "1 1 0" "$(calls 4) $(r15) $(logn 'changed by someone else')"
+    # Google answers with another address: the old one stays
+    echo 192.0.2.11 > "$RUN/gp4"; age; ctl status >/dev/null
+    check "rotated answer: looked up after the interval, both addresses kept" "2 2 wlan0 wlan0 wgs0" "$(calls 4) $(r15) $(gms 192.0.2.10) $(gms 192.0.2.11) $(app 192.0.2.11)"
+    # a lookup that gives nothing changes nothing
+    : > "$RUN/gp4"; age; ctl status >/dev/null
+    check "failed lookup (asked with -4, then without): the kept addresses stay" "4 2 -4 plain" "$(calls 4) $(r15) $(sed -n 3p "$RUN/gp.calls" | cut -d' ' -f2) $(sed -n 4p "$RUN/gp.calls" | grep -q ' -4 ' && echo -4 || echo plain)"
+    # 192.0.2.10 not seen for longer than the window (100 s here): dropped
+    now=$(cut -d. -f1 /proc/uptime)
+    sed -i "s/^4 192.0.2.10 .*/4 192.0.2.10 $((now - 200))/" "$STATE/gpay"
+    echo 192.0.2.11 > "$RUN/gp4"; age; ctl status >/dev/null
+    check "address not seen for the whole window: its rule gone, the other one stays" "1 wgs0 wlan0" "$(r15) $(gms 192.0.2.10) $(gms 192.0.2.11)"
+    # the screen off with the Battery profile: nothing is pinged
+    echo 1 > "$RUN/screen"; age; ctl status >/dev/null
+    check "Battery profile, screen off: no lookup, the rule stays" "5 1" "$(calls 4) $(r15)"
+    ctl set profile always >/dev/null
+    check "Always profile, screen off: looked up" "6 1" "$(calls 4) $(r15)"
+    ctl set profile battery >/dev/null; echo 2 > "$RUN/screen"
+    # the setting
+    check "set gpay: only 0 or 1" "0 1" "$(ctl set gpay x 2>&1 | kv ok) $(st gpay)"
+    check "set gpay 0: no rule, Play services through the tunnel" "1 0 0 0 wgs0" "$(ctl set gpay 0 | kv ok) $(setting GPAY) $(st gpay) $(r15) $(gms 192.0.2.11)"
+    ctl status >/dev/null
+    check "setting off: no lookup on later ticks" "6 0" "$(calls 4) $(r15)"
+    check "set gpay 1: the rule again" "1 1 1 wlan0" "$(ctl set gpay 1 | kv ok) $(st gpay) $(r15) $(gms 192.0.2.11)"
+    # settings written by an older version: no GPAY line = on
+    grep -v '^GPAY=' "$WGS_DATA/settings.conf" > "$RUN/settings.old"; cp "$RUN/settings.old" "$WGS_DATA/settings.conf"
+    ctl status >/dev/null
+    check "settings without the key: on" "1 1" "$(st gpay) $(r15)"
+    # the default network changes to mobile data: the rules follow it
+    ip link add rmnet7 type veth peer name rmnet7p && ip link set rmnet7p up && ip link set rmnet7 up
+    ip addr add 10.67.0.2/24 dev rmnet7; ip route add default dev rmnet7 table 1037
+    echo "1037 rmnet7" >> "$WGS_RT_TABLES"; echo "107 INTERNET&NOT_RESTRICTED&TRUSTED&VALIDATED" >> "$RUN/networks"
+    ip rule add pref 16000 fwmark 0x1006b/0x1ffff iif lo lookup 1037
+    ip rule del pref 31000; ip rule add pref 31000 fwmark 0x0/0xffff iif lo lookup 1037
+    c0=$(calls 4); ctl status >/dev/null
+    check "default network changed: looked up at once, the rule on the new network" "$((c0 + 1)) 1 1 rmnet7 wgs0" "$(calls 4) $(r15) $(ip rule | grep -c '^5015:.* to 192.0.2.11 .*lookup 1037') $(gms 192.0.2.11) $(app 192.0.2.11)"
+    ip rule del pref 31000; ip rule add pref 31000 fwmark 0x0/0xffff iif lo lookup 1028
+    ip rule del pref 16000 fwmark 0x1006b/0x1ffff iif lo lookup 1037
+    sed -i '/^107 /d' "$RUN/networks"; sed -i '/ rmnet7$/d' "$WGS_RT_TABLES"; ip link del rmnet7
+    ctl status >/dev/null
+    check "back on the Wi-Fi: the rule follows" "1 wlan0" "$(r15) $(gms 192.0.2.11)"
+    # the Wi-Fi gets IPv6: IPv6 addresses too
+    echo 0 > "$WGS_PROC6/all/disable_ipv6"
+    ip -6 addr add fd11::50/64 dev wlan0 nodad 2>/dev/null
+    ip -6 route add default via fd11::1 dev wlan0 table 1028 2>/dev/null
+    age; ctl status >/dev/null
+    check "network with IPv6: IPv6 looked up, its rule as ip lists the address" "1 1 1 wlan0 blocked" "$(calls 6) $(r15v6) $(ip -6 rule | grep -c '^5015:.* to 2001:db8::10 .*uidrange 10123-10123 lookup 1028') $(via -6 route get 2001:db8::10 uid 10123) $(via -6 route get 2001:db8::10 uid 10200)"
+    ip -6 route del default via fd11::1 dev wlan0 table 1028 2>/dev/null
+    ctl status >/dev/null
+    check "IPv6 gone from the network: no IPv6 rule, IPv4 kept" "0 1" "$(r15v6) $(r15)"
+    ip -6 route add default via fd11::1 dev wlan0 table 1028 2>/dev/null
+    ctl status >/dev/null
+    check "IPv6 back: its kept address again" 1 "$(r15v6)"
+    # the tunnel stops answering, kill switch on: everything else blocked, the payment server still reachable
+    echo $(( $(date +%s) - 400 )) > "$STATE/fake_hs"; ctl status >/dev/null
+    check "tunnel not answering, kill switch: the rule stays, the rest stays in" "notup 1 wlan0 wgs0" "$([ "$(st state)" = up ] && echo up || echo notup) $(r15) $(gms 192.0.2.11) $(gms 192.0.2.99)"
+    date +%s > "$STATE/fake_hs"; ctl status >/dev/null
+    # pause, an Android VPN, restart, off
+    b="$(r15) $(r15v6)"; ctl pause 5 >/dev/null
+    check "paused: no rule" "1 1 paused 0 0" "$b $(st state) $(r15) $(r15v6)"
+    ctl resume >/dev/null; ctl status >/dev/null
+    check "resumed: the rules again" "up 1 1" "$(st state) $(r15) $(r15v6)"
+    ip rule add pref 13000 fwmark 0x0/0x20000 iif lo uidrange 10000-19999 lookup 1028
+    b="$(r15) $(r15v6)"; ctl status >/dev/null
+    check "an Android VPN: steps aside, no rule" "1 1 paused android_vpn 0 0" "$b $(st state) $(st reason) $(r15) $(r15v6)"
+    ip rule del pref 13000; ctl status >/dev/null
+    check "the VPN gone: the rules again" "up 1 1" "$(st state) $(r15) $(r15v6)"
+    c0=$(calls 4)
+    ctl restart >/dev/null 2>&1; wd=$(cat "$STATE/watchdog.pid" 2>/dev/null); [ -n "$wd" ] && kill "$wd" 2>/dev/null; sleep 0.3
+    p=$(cat "$STATE/monitor.pid" 2>/dev/null); [ -n "$p" ] && kill "$p" 2>/dev/null
+    date +%s > "$STATE/fake_hs"; ctl status >/dev/null
+    check "restart: looked up again, exactly the wanted rules" "1 1 1 1" "$([ "$(calls 4)" -gt "$c0" ] && echo 1 || echo 0) $(r15) $(r15v6) $(ip rule | grep -c '^5015:.* to 192.0.2.11 ')"
+    b="$(r15) $(r15v6)"; ctl down >/dev/null
+    check "off: no rule in either family" "1 1 off 0 0 wlan0" "$b $(st state) $(r15) $(r15v6) $(gms 192.0.2.11)"
+    gpf() { find "$STATE" -maxdepth 1 -name 'gpay*' | grep -c .; }
+    b=$(gpf); $TSH "$MOD/post-fs-data.sh" >/dev/null 2>&1
+    check "boot: the addresses, the last lookup and the uid are forgotten" "3 0" "$b $(gpf)"
+    # no ping6 on the phone: ping -6
+    echo 0 > "$WGS_PROC6/all/disable_ipv6"; ip -6 route add default via fd11::1 dev wlan0 table 1028 2>/dev/null
+    cat > "$FAKES/gping46" <<EOF
+#!/bin/sh
+case "\$1" in -6) shift; exec "$FAKES/gping6" "\$@" ;; esac
+exec "$FAKES/gping" "\$@"
+EOF
+    chmod 755 "$FAKES/gping46"
+    : > "$RUN/gp.calls"
+    WGS_PING="$FAKES/gping46" WGS_PING6="$RUN/no-ping6" ctl up wg-GP-1 >/dev/null
+    check "no ping6: IPv6 looked up with ping -6" "1 1 1" "$(calls 4) $(calls 6) $(r15v6)"
+    ctl down >/dev/null
+    ip -6 route del default via fd11::1 dev wlan0 table 1028 2>/dev/null
+    ip -6 route del default via fd11::1 dev wlan0 table 1028 2>/dev/null
+    ip -6 addr del fd11::50/64 dev wlan0 2>/dev/null
+    echo 1 > "$WGS_PROC6/all/disable_ipv6"
+    # Play services not installed: nothing looked up, no rule
+    reset_state; : > "$RUN/gp.calls"; echo 192.0.2.10 > "$RUN/gp4"
+    export WGS_PM="$FAKES/pm-nogms"
+    ctl import wg-GP-1.conf >/dev/null; date +%s > "$STATE/fake_hs"; ctl up wg-GP-1 >/dev/null
+    check "no Play services uid: no lookup, no rule, said once in the log" "up 0 0 1" "$(st state) $(calls 4) $(r15) $(logn 'Play services is not installed')"
+    # installed later: "not installed" is asked again after the interval
+    # (the file's age), not at every tick; a package manager without an
+    # answer then is not asked again at the next tick either
+    printf '#!/bin/sh\necho x >> "%s"\n' "$RUN/pm.calls" > "$FAKES/pm-silent"
+    printf '#!/bin/sh\necho x >> "%s"\nexec "%s"\n' "$RUN/pm.calls" "$FAKES/pm-gms" > "$FAKES/pm-gmsc"
+    chmod 755 "$FAKES/pm-silent" "$FAKES/pm-gmsc"
+    : > "$RUN/pm.calls"; export WGS_PM="$FAKES/pm-gmsc"; ctl status >/dev/null
+    b="$(grep -c . "$RUN/pm.calls") $(r15)"
+    touch -d @1 "$STATE/gpay_uid"; export WGS_PM="$FAKES/pm-silent"; ctl status >/dev/null; ctl status >/dev/null
+    b="$b $(grep -c . "$RUN/pm.calls") $(r15)"
+    touch -d @1 "$STATE/gpay_uid"; export WGS_PM="$FAKES/pm-gmsc"; ctl status >/dev/null
+    check "Play services installed later: not asked before the interval; after it asked once (also when pm is silent), then its rule, logged" "0 0 1 0 2 1 1 1" "$b $(grep -c . "$RUN/pm.calls") $(r15) $(logn 'Play services (uid 10123)') $(logn 'Play services is not installed')"
+    export WGS_PM="$FAKES/pm-nogms"
+    ctl down >/dev/null
+    # the package manager gives no answer (early boot): no rule, asked again at the next tick
+    reset_state; : > "$RUN/gp.calls"
+    printf '#!/bin/sh\nexit 1\n' > "$FAKES/pm-none"; chmod 755 "$FAKES/pm-none"
+    export WGS_PM="$FAKES/pm-none"
+    ctl import wg-GP-1.conf >/dev/null; date +%s > "$STATE/fake_hs"; ctl up wg-GP-1 >/dev/null
+    b="$(calls 4) $(r15) $([ -f "$STATE/gpay_uid" ] && echo yes || echo no)"
+    export WGS_PM="$FAKES/pm-gms"; ctl status >/dev/null
+    check "uid lookup without an answer: no rule, no lookup; once pm answers: the rule" "0 0 no 1 1 wlan0" "$b $(calls 4) $(r15) $(gms 192.0.2.10)"
+    ctl down >/dev/null
+    # a ping that resolves both families (newer iputils): without -4 it names the IPv6 address
+    cat > "$FAKES/gpingu" <<EOF
+#!/bin/sh
+for a; do :; done
+[ "\$a" = payments-pa.googleapis.com ] || exit 1
+echo "4 \$*" >> "$RUN/gp.calls"
+case " \$* " in *" -4 "*) n=\$(cat "$RUN/gp4") ;; *) n=\$(cat "$RUN/gp6") ;; esac
+echo "PING \$a (\$n) 56 data bytes"
+exit 1
+EOF
+    # an old IPv4-only ping: refuses -4
+    cat > "$FAKES/gpingo" <<EOF
+#!/bin/sh
+for a; do :; done
+[ "\$a" = payments-pa.googleapis.com ] || exit 1
+echo "4 \$*" >> "$RUN/gp.calls"
+case " \$* " in *" -4 "*) echo "ping: invalid option -- '4'" >&2; exit 2 ;; esac
+echo "PING \$a (\$(cat "$RUN/gp4")) 56(84) bytes of data."
+exit 1
+EOF
+    chmod 755 "$FAKES/gpingu" "$FAKES/gpingo"
+    rm -f "$STATE/gpay" "$STATE/gpay_at"; : > "$RUN/gp.calls"
+    WGS_PING="$FAKES/gpingu" ctl up wg-GP-1 >/dev/null
+    check "ping resolving both families: asked for IPv4, its rule" "1 -4 1 1 wlan0" "$(calls 4) $(cut -d' ' -f2 "$RUN/gp.calls" | head -n 1) $(r15) $(ip rule | grep -c '^5015:.* to 192.0.2.10 ') $(gms 192.0.2.10)"
+    ctl down >/dev/null
+    rm -f "$STATE/gpay" "$STATE/gpay_at"; : > "$RUN/gp.calls"
+    WGS_PING="$FAKES/gpingo" ctl up wg-GP-1 >/dev/null
+    check "old ping that refuses -4: asked again without it, its rule" "2 -4 plain 1 wlan0" "$(calls 4) $(sed -n 1p "$RUN/gp.calls" | cut -d' ' -f2) $(sed -n 2p "$RUN/gp.calls" | grep -q ' -4 ' && echo -4 || echo plain) $(r15) $(gms 192.0.2.10)"
+    ctl down >/dev/null
+    # a busybox without the timeout applet: the lookup is bounded without it
+    cat > "$FAKES/bb-notimeout" <<'EOF'
+#!/bin/sh
+case "$1" in --list) printf '%s\n' sh unzip ;; *) echo "$1: applet not found" >&2; exit 127 ;; esac
+EOF
+    chmod 755 "$FAKES/bb-notimeout"
+    rm -f "$STATE/gpay" "$STATE/gpay_at"; : > "$RUN/gp.calls"
+    WGS_BB="$FAKES/bb-notimeout" ctl up wg-GP-1 >/dev/null
+    check "busybox without the timeout applet: the address still looked up, its rule" "1 1 wlan0" "$(calls 4) $(r15) $(gms 192.0.2.10)"
+    ctl down >/dev/null
+    # a lookup that hangs (the tunnel's DNS does not answer, then "unknown
+    # host"): stopped at the round's deadline (1 s here), the round's other
+    # lookups (the retry without -4) not made - the tick holds the lock
+    cat > "$FAKES/gpings" <<EOF
+#!/bin/sh
+for a; do :; done
+echo "4 \$*" >> "$RUN/gp.calls"
+sleep 10
+echo end >> "$RUN/gp.end"
+echo "ping: unknown host \$a" >&2
+exit 2
+EOF
+    chmod 755 "$FAKES/gpings"
+    rm -f "$STATE/gpay" "$STATE/gpay_at" "$RUN/gp.end"; : > "$RUN/gp.calls"
+    WGS_PING="$FAKES/gpings" WGS_GPAY_WAIT=1 ctl up wg-GP-1 >/dev/null 2>"$RUN/gp.err"
+    check "lookup that hangs: stopped at the deadline, no other lookup in that round, nothing on stderr, no output file left" "1 0 0 0" "$(calls 4) $(cat "$RUN/gp.end" 2>/dev/null | grep -c .) $(grep -c . "$RUN/gp.err") $(find "$STATE" -maxdepth 1 -name 'gpay.out.*' | grep -c .)"
+    ctl down >/dev/null
+    # the tunnel carries IPv6, the Wi-Fi has none: Play services' IPv6 to the
+    # server would go through the tunnel - unreachable, so it takes IPv4
+    echo 0 > "$WGS_PROC6/all/disable_ipv6"; mkdir -p "$WGS_PROC6/wgs0"; echo 0 > "$WGS_PROC6/wgs0/disable_ipv6"
+    conf "$WGS_DL/wg-GP-6.conf" 203.0.113.102:51820
+    sed -i 's#^Address = .*#Address = 10.2.0.2/32, fd00::2/128#; s#^AllowedIPs = .*#AllowedIPs = 0.0.0.0/0, ::/0#' "$WGS_DL/wg-GP-6.conf"
+    ctl import wg-GP-6.conf >/dev/null
+    rm -f "$STATE/gpay" "$STATE/gpay_at"; : > "$RUN/gp.calls"; echo 192.0.2.10 > "$RUN/gp4"
+    date +%s > "$STATE/fake_hs"; ctl up wg-GP-6 >/dev/null
+    u6() { ip -6 rule | grep -c '^5015:.* to 2001:db8::10 .*unreachable'; }
+    check "tunnel with IPv6, network without: IPv6 looked up, Play services' IPv6 to it unreachable, IPv4 around" "up tunnel 1 1 1 blocked wgs0 wgs0 1 wlan0" "$(st state) $(st ipv6) $(calls 6) $(r15v6) $(u6) $(via -6 route get 2001:db8::10 uid 10123) $(via -6 route get 2001:db8::10 uid 10200) $(via -6 route get 2001:db8::99 uid 10123) $(r15) $(gms 192.0.2.10)"
+    # the Wi-Fi gets IPv6: the normal rule, without a new lookup
+    ip -6 addr add fd11::50/64 dev wlan0 nodad 2>/dev/null
+    ip -6 route add default via fd11::1 dev wlan0 table 1028 2>/dev/null
+    ctl status >/dev/null
+    check "network gets IPv6: around the tunnel instead of unreachable, no new lookup" "1 1 0 1 wlan0" "$(calls 6) $(r15v6) $(u6) $(ip -6 rule | grep -c '^5015:.* to 2001:db8::10 .*lookup 1028') $(via -6 route get 2001:db8::10 uid 10123)"
+    ip -6 route del default via fd11::1 dev wlan0 table 1028 2>/dev/null
+    ctl status >/dev/null
+    check "network loses IPv6: unreachable again" "1 1 blocked" "$(r15v6) $(u6) $(via -6 route get 2001:db8::10 uid 10123)"
+    b="$(r15v6) $(u6)"; ctl set gpay 0 >/dev/null
+    check "set gpay 0: no IPv6 rule, Play services' IPv6 through the tunnel" "1 1 0 wgs0" "$b $(r15v6) $(via -6 route get 2001:db8::10 uid 10123)"
+    ctl set gpay 1 >/dev/null
+    b=$(u6); ctl down >/dev/null
+    check "off: no IPv6 rule" "1 0" "$b $(r15v6)"
+    ip -6 addr del fd11::50/64 dev wlan0 2>/dev/null
+    echo 1 > "$WGS_PROC6/all/disable_ipv6"
+    # an address not seen for the whole window (100 s here) while no lookup can
+    # run - the tunnel down (kill switch), the screen off (Battery): its rule goes
+    reset_state; : > "$RUN/gp.calls"; echo 192.0.2.10 > "$RUN/gp4"; export WGS_PM="$FAKES/pm-gms"
+    ctl import wg-GP-1.conf >/dev/null; date +%s > "$STATE/fake_hs"; ctl up wg-GP-1 >/dev/null
+    b="$(r15)"; now=$(cut -d. -f1 /proc/uptime)
+    sed -i "s/^4 192.0.2.10 .*/4 192.0.2.10 $((now - 200))/" "$STATE/gpay"
+    echo $(( $(date +%s) - 400 )) > "$STATE/fake_hs"; ctl status >/dev/null
+    b="$b $([ "$(st state)" = up ] && echo up || echo notup) $(r15)"
+    echo 1 > "$RUN/screen"; date +%s > "$STATE/fake_hs"; c0=$(calls 4); ctl status >/dev/null
+    b="$b $(st state) $(( $(calls 4) - c0 )) $(r15)"
+    echo 2 > "$RUN/screen"; ctl status >/dev/null
+    check "address older than the window: its rule gone while down and with the screen off (no lookup), back with the next lookup" "1 notup 0 up 0 0 1 wlan0" "$b $(r15) $(gms 192.0.2.10)"
+    ctl down >/dev/null
+    export WGS_PM="$FAKES/pm" WGS_PING="$FAKES/ping" WGS_GETPROP="$FAKES/getprop"
+    unset WGS_PING6 WGS_GPAY_KEEP
+    else
+        echo "  skip gpay (no --map-auto: uidrange rules need the uids)"
+    fi
+fi
+
 if want endpoint6; then
     echo "endpoint6: a literal IPv6 endpoint in brackets - import, rule 5000 in the IPv6 rules, switches, teardown"
     reset_state
@@ -1874,18 +2182,18 @@ if want backslash_out; then
     ctl import wg-BS-1.conf >/dev/null
     ctl up wg-BS-1 >/dev/null
     lines0=$(grep -c . "$MOD/module.prop")
-    sed -i 's#^Endpoint = .*#Endpoint = x\\ninjected=u:1#' "$WGS_DATA/tunnels/wg-BS-1.conf"
+    sed -i 's#^Endpoint = .*#Endpoint = x\\nupdateJson=u:1#' "$WGS_DATA/tunnels/wg-BS-1.conf"
     ctl status >/dev/null
-    check "state error with the text in its reason" "error 1" "$(st state) $(st reason | grep -cF 'x\ninjected=u:1')"
-    check "module.prop: still one description line, no line added" "$lines0 1 0" "$(grep -c . "$MOD/module.prop") $(grep -c '^description=' "$MOD/module.prop") $(grep -c '^injected=' "$MOD/module.prop")"
+    check "state error with the text in its reason" "error 1" "$(st state) $(st reason | grep -cF 'x\nupdateJson=u:1')"
+    check "module.prop: still one description line, no line added" "$lines0 1 1" "$(grep -c . "$MOD/module.prop") $(grep -c '^description=' "$MOD/module.prop") $(grep -c '^updateJson=' "$MOD/module.prop")"
     out=$(ctl up wg-BS-1 2>&1)
-    check "up refused: one error line, nothing else" "2 1 0" "$(echo "$out" | grep -c .) $(echo "$out" | grep -c '^error=tunnel wg-BS-1 is invalid') $(echo "$out" | grep -c '^injected=')"
-    check "list: one line for the tunnel" "1 0" "$(ctl list | grep -c '^tunnel=wg-BS-1 invalid=1') $(ctl list | grep -c '^injected=')"
-    check "log: no line made of the file's text" 0 "$(grep -c '^injected=' "$WGS_DATA/logs/wg-shield.log")"
+    check "up refused: one error line, nothing else" "2 1 0" "$(echo "$out" | grep -c .) $(echo "$out" | grep -c '^error=tunnel wg-BS-1 is invalid') $(echo "$out" | grep -c '^updateJson=')"
+    check "list: one line for the tunnel" "1 0" "$(ctl list | grep -c '^tunnel=wg-BS-1 invalid=1') $(ctl list | grep -c '^updateJson=')"
+    check "log: no line made of the file's text" 0 "$(grep -c '^updateJson=' "$WGS_DATA/logs/wg-shield.log")"
     ctl down >/dev/null
     # the manager's Action button (tunnel off: it turns the last one on, refused)
     out=$($TSH "$MOD/action.sh" 2>&1)
-    check "action: the error on one line, its text whole" "2 1 0" "$(echo "$out" | grep -c .) $(echo "$out" | grep -cF "Error: tunnel wg-BS-1 is invalid: Endpoint must be an IPv4 address, an IPv6 address in brackets or a host name (got 'x\ninjected=u:1')") $(echo "$out" | grep -c '^injected=')"
+    check "action: the error on one line, its text whole" "2 1 0" "$(echo "$out" | grep -c .) $(echo "$out" | grep -cF "Error: tunnel wg-BS-1 is invalid: Endpoint must be an IPv4 address, an IPv6 address in brackets or a host name (got 'x\nupdateJson=u:1')") $(echo "$out" | grep -c '^updateJson=')"
 fi
 
 if want busybox_path; then
@@ -1900,6 +2208,17 @@ if want busybox_path; then
     check "KernelSU first" "$WGS_ADB/ksu/bin/busybox" "$(bbof)"
     rm -rf "$WGS_ADB/ksu" "$WGS_ADB/ap" "$WGS_ADB/magisk"
     check "none: the KernelSU path (as before)" "$WGS_ADB/ksu/bin/busybox" "$(bbof)"
+fi
+
+if want module_prop; then
+    echo "module_prop: the status line in module.prop"
+    reset_state
+    conf "$WGS_DL/wg-MP-1.conf" 203.0.113.90:51820
+    ctl import wg-MP-1.conf >/dev/null
+    date +%s > "$STATE/fake_hs"
+    ctl up wg-MP-1 >/dev/null
+    check "status line written into the description, the other lines kept" "1 1 1 1 1" "$(grep -c '^description=.*Status: .*Protected' "$MOD/module.prop") $(grep -c '^id=wg-shield$' "$MOD/module.prop") $(grep -c '^version=' "$MOD/module.prop") $(grep -c '^versionCode=' "$MOD/module.prop") $(grep -c '^updateJson=' "$MOD/module.prop")"
+    ctl down >/dev/null
 fi
 
 if want wait_up; then
@@ -2481,6 +2800,43 @@ EOF
     rm -rf "$RUN/mvfail" "$WGS_SYSNET/wgs0"
 fi
 
+if want speedmerge; then
+    echo "speedmerge: speed test results of an address keep its other tunnels; the test lock"
+    reset_state
+    conf "$WGS_DL/wg-SM-1.conf" 203.0.113.141:51820; conf "$WGS_DL/wg-SM-2.conf" 203.0.113.141:51820
+    ctl import wg-SM-1.conf >/dev/null; ctl import wg-SM-2.conf >/dev/null; ctl fav add wg-SM-1 >/dev/null
+    # an earlier test of the SM box: both tunnels on the one address
+    echo "203.0.113.141|5|30|ok|$(date +%s)|wg-SM-1,wg-SM-2" > "$WGS_DATA/speedtest"
+    out=$(WGS_TEST_HS_MAX=2 ctl test favorites 2>&1)
+    check "test of a box with one of an address's tunnels: the new result names the other one too" "1 wg-SM-1,wg-SM-2" "$(echo "$out" | grep -c '^r=203.0.113.141|.*|wg-SM-1|') $(grep '^203.0.113.141|' "$WGS_DATA/speedtest" | cut -d'|' -f6)"
+    # a results file edited by hand, without a final line break: merged as well
+    printf '%s' "203.0.113.141|5|30|ok|$(date +%s)|wg-SM-1,wg-SM-2" > "$WGS_DATA/speedtest"
+    WGS_TEST_HS_MAX=2 ctl test favorites >/dev/null 2>&1
+    check "results file without a final line break: the new result saved, the other tunnel kept" "1 wg-SM-1,wg-SM-2" "$(grep -c . "$WGS_DATA/speedtest") $(grep '^203.0.113.141|' "$WGS_DATA/speedtest" | cut -d'|' -f6)"
+    # the test lock: a folder without its pid yet is another test starting
+    # (busy), one left like that for longer is taken over (QQ has no tunnels)
+    mkdir -p "$STATE/test.lock"
+    b=$(ctl test QQ 2>&1 | sed -n 's/^error=//p')
+    touch -d @1 "$STATE/test.lock"
+    check "speed test lock without a pid: busy while new, taken over when old" "a speed test is already running|no tunnels in QQ" "$b|$(ctl test QQ 2>&1 | sed -n 's/^error=//p')"
+    rm -rf "$STATE/test.lock"
+    reset_state
+fi
+
+if want speedbusy; then
+    echo "speedbusy: a host name not looked up because the watchdog's lock stayed busy is logged"
+    reset_state
+    conf "$WGS_DL/wg-SB-1.conf" vpn.example.com:51820
+    ctl import wg-SB-1.conf >/dev/null
+    sleep 60 & holder=$!
+    mkdir "$STATE/lock" && echo "$holder" > "$STATE/lock/pid"
+    # ctl test with its 1 s waits skipped (lock_get waits 20 x 1 s)
+    out=$($TSH -c "sleep() { :; }; . \"\$WGS_MODDIR/ctl.sh\"" ctl test SB 2>&1)
+    kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null; rm -rf "$STATE/lock"
+    check "shown as not found, the skipped lookup logged" "1 1" "$(echo "$out" | grep -c '^r=host:vpn.example.com|.*|wg-SB-1|no_address') $(grep -c 'WARN.*speed test: wg-SB-1 - the watchdog stayed busy for 20 s, vpn.example.com not looked up' "$WGS_DATA/logs/wg-shield.log")"
+    reset_state
+fi
+
 if want last_line; then
     echo "last_line: settings, favorites and a backup's favorites without a final line break keep their last line"
     reset_state
@@ -2580,6 +2936,195 @@ EOF
     check "no rules.batch file left" "" "$(find "$STATE" -name 'rules.batch.*' 2>/dev/null | sed "s#^$STATE/##" | tr '\n' ' ')"
     rm -rf "$RUN/rbfail"
     ctl down >/dev/null
+fi
+
+if want stale5001; then
+    echo "stale5001: a host-name lookup killed midway (the speed test's process group) leaves no rule 5001 while a tunnel is up"
+    reset_state
+    conf "$WGS_DL/wg-SR-1.conf" 203.0.113.131:51820
+    conf "$WGS_DL/wg-SR-2.conf" vpn.example.com:51820
+    ctl import wg-SR-1.conf >/dev/null; ctl import wg-SR-2.conf >/dev/null
+    date +%s > "$STATE/fake_hs"
+    ctl up wg-SR-1 >/dev/null
+    # busybox whose nslookup kills its whole process group: the test, started
+    # in a session of its own, dies with rule 5001 in place
+    # shellcheck disable=SC2016 # the fake's own variables
+    printf '#!/bin/sh\ncase "$1" in timeout) shift 2; exec "$@" ;; nslookup) kill -9 0 ;; *) exit 127 ;; esac\n' > "$FAKES/bbk"
+    chmod 755 "$FAKES/bbk"
+    # shellcheck disable=SC2086 # TSH may be "busybox sh"
+    WGS_BB="$FAKES/bbk" WGS_TEST_HS_MAX=2 setsid -w $TSH "$MOD/ctl.sh" test SR >/dev/null 2>&1
+    b=$(ip rule | grep -c '^5001:')
+    ctl status >/dev/null; ctl status >/dev/null
+    check "killed lookup: its rule 5001 there, gone after the next tick, traffic still in the tunnel" "1 0 wgs0" "$b $(ip rule | grep -c '^5001:') $(route_of)"
+    ctl down >/dev/null
+fi
+
+if want wd_term; then
+    echo "wd_term: the watchdog stopped (TERM, as ctl.sh restart does) during a Google Pay lookup leaves no ping and no temp file"
+    reset_state
+    printf '#!/bin/sh\necho "package:com.google.android.gms uid:10123"\n' > "$FAKES/pm-wt"
+    # a lookup that hangs: the ping notes its pid, then waits
+    printf '#!/bin/sh\necho $$ > "%s"\nexec sleep 30\n' "$RUN/wt.pid" > "$FAKES/ping-wt"
+    chmod 755 "$FAKES/pm-wt" "$FAKES/ping-wt"
+    conf "$WGS_DL/wg-WT-1.conf" 203.0.113.171:51820
+    ctl import wg-WT-1.conf >/dev/null
+    date +%s > "$STATE/fake_hs"
+    WGS_PM="$FAKES/pm-wt" WGS_PING="$FAKES/ping-wt" WGS_GPAY_WAIT=1 ctl up wg-WT-1 >/dev/null
+    rm -f "$STATE/gpay_at" "$RUN/wt.pid"
+    WGS_PM="$FAKES/pm-wt" WGS_PING="$FAKES/ping-wt" WGS_GPAY_WAIT=20 WGS_FAST=1000 $TSH "$MOD/service.sh" </dev/null >/dev/null 2>&1 &
+    _n=0; while [ ! -s "$RUN/wt.pid" ] && [ "$_n" -lt 100 ]; do sleep 0.1; _n=$((_n + 1)); done
+    wd=$(cat "$STATE/watchdog.pid" 2>/dev/null)
+    b="$(find "$STATE" -maxdepth 1 -name "gpay.out.tmp.$wd" | grep -c .)"
+    kill "$wd" 2>/dev/null
+    _n=0; while kill -0 "$wd" 2>/dev/null && [ "$_n" -lt 50 ]; do sleep 0.1; _n=$((_n + 1)); done
+    sleep 0.3
+    pp=$(cat "$RUN/wt.pid" 2>/dev/null)
+    check "watchdog gone, its lookup's ping stopped, no temp file of it, lock and network watch released" "1 no no 0 no no" \
+        "$b $(kill -0 "$wd" 2>/dev/null && echo yes || echo no) $([ -n "$pp" ] && kill -0 "$pp" 2>/dev/null && echo yes || echo no) $(find "$STATE" -maxdepth 1 -name "*.$wd" | grep -c .) $([ -d "$STATE/lock" ] && echo yes || echo no) $([ -f "$STATE/monitor.pid" ] && echo yes || echo no)"
+    [ -n "$pp" ] && kill "$pp" 2>/dev/null
+    p=$(cat "$STATE/monitor.pid" 2>/dev/null); [ -n "$p" ] && kill "$p" 2>/dev/null
+    ctl down >/dev/null
+fi
+
+if want resolve_budget; then
+    echo "resolve_budget: a host-name lookup round stays within 18 s under the lock (6 s per resolver, shared out among five)"
+    reset_state
+    RB="$RUN/rbudget.log"; rm -f "$RB"
+    # busybox that notes the timeout of every lookup; no resolver answers
+    # shellcheck disable=SC2016 # the fake's own variables
+    printf '#!/bin/sh\ncase "$1" in timeout) echo "$2" >> "%s"; shift 2; exec "$@" ;; nslookup) exit 1 ;; *) exit 127 ;; esac\n' "$RB" > "$FAKES/bbt"
+    chmod 755 "$FAKES/bbt"
+    conf "$WGS_DL/wg-RG-1.conf" vpn.example.com:51820
+    ctl import wg-RG-1.conf >/dev/null
+    # DNSCrypt Proxy before 2.1.20-r4: Quad9 first, then the three others
+    mkdir -p "$WGS_MODULES/dnscrypt-proxy-android"; printf '%s\n' id=dnscrypt-proxy-android versionCode=50 > "$WGS_MODULES/dnscrypt-proxy-android/module.prop"
+    WGS_BB="$FAKES/bbt" ctl up wg-RG-1 >/dev/null
+    b=$(tr '\n' ' ' < "$RB"); rm -rf "$WGS_MODULES/dnscrypt-proxy-android"; : > "$RB"
+    WGS_BB="$FAKES/bbt" ctl status >/dev/null
+    check "five resolvers: 3 s each; three: 6 s each" "3 3 3 3 3 |6 6 6 |resolving" "$b|$(tr '\n' ' ' < "$RB")|$(st reason)"
+    ctl down >/dev/null
+fi
+
+if want resolve_once; then
+    echo "resolve_once: a host-name tunnel found down whose lookups fail: one round of lookups per tick (looked up again, then the first restart)"
+    reset_state
+    RO="$RUN/ronce.log"; rm -f "$RO"
+    # shellcheck disable=SC2016 # the fakes' own variables
+    printf '#!/bin/sh\ncase "$1" in timeout) shift 2; exec "$@" ;; nslookup) [ "$3" = 1.0.0.1 ] || exit 1; printf "Name:\\t%%s\\nAddress: 203.0.113.80\\n" "$2" ;; *) exit 127 ;; esac\n' > "$FAKES/bbok"
+    # shellcheck disable=SC2016
+    printf '#!/bin/sh\ncase "$1" in timeout) shift 2; exec "$@" ;; nslookup) echo "$3" >> "%s"; exit 1 ;; *) exit 127 ;; esac\n' "$RO" > "$FAKES/bbno"
+    chmod 755 "$FAKES/bbok" "$FAKES/bbno"
+    conf "$WGS_DL/wg-RO-1.conf" vpn.example.com:51820
+    ctl import wg-RO-1.conf >/dev/null
+    date +%s > "$STATE/fake_hs"
+    WGS_BB="$FAKES/bbok" ctl up wg-RO-1 >/dev/null
+    b="$(st state) $(st endpoint)"
+    echo 0 > "$STATE/resolved_at"; echo $(( $(date +%s) - 600 )) > "$STATE/fake_hs"
+    WGS_BB="$FAKES/bbno" ctl status >/dev/null
+    # the step right after that tick (the next tick may already make the second restart)
+    c="$(grep -c . "$RO") $(st recover)"; : > "$RO"
+    WGS_BB="$FAKES/bbno" ctl status >/dev/null
+    check "one tick: 3 lookups (not 6), the restart still made; the next tick asks again" "up 203.0.113.80:51820 3 restart 1/2 3" "$b $c $(grep -c . "$RO")"
+    ctl down >/dev/null
+fi
+
+if want upwait_slow; then
+    echo "upwait_slow: up waits for the first handshake by time, not by ticks: a host-name tunnel whose lookups get no answer"
+    reset_state
+    UW="$RUN/upwait.log"; rm -f "$UW"
+    # every lookup takes 1 s and gets no answer: one tick of three lookups is longer than the wait (2 s here)
+    # shellcheck disable=SC2016 # the fake's own variables
+    printf '#!/bin/sh\ncase "$1" in timeout) shift 2; exec "$@" ;; nslookup) echo "$3" >> "%s"; sleep 1; exit 1 ;; *) exit 127 ;; esac\n' "$UW" > "$FAKES/bbslow"
+    chmod 755 "$FAKES/bbslow"
+    conf "$WGS_DL/wg-UW-1.conf" vpn.example.com:51820
+    ctl import wg-UW-1.conf >/dev/null
+    out=$(WGS_BB="$FAKES/bbslow" WGS_UP_WAIT=2 ctl up wg-UW-1 2>&1)
+    check "one tick of lookups (3), then the answer: ok, connecting, looking the name up" "3 1 handshaking resolving" "$(grep -c . "$UW") $(echo "$out" | kv ok) $(echo "$out" | sed -n 's/^state=//p') $(echo "$out" | sed -n 's/^reason=//p')"
+    ctl down >/dev/null
+fi
+
+if want busy_effect; then
+    echo "busy_effect: a command that does not get the lock changes nothing, or says its change is saved"
+    reset_state
+    conf "$WGS_DL/wg-BE-1.conf" 203.0.113.181:51820
+    conf "$WGS_DL/wg-BE-2.conf" 203.0.113.182:51820
+    ctl import wg-BE-1.conf >/dev/null; ctl import wg-BE-2.conf >/dev/null
+    date +%s > "$STATE/fake_hs"
+    ctl up wg-BE-1 >/dev/null
+    # ctl with its 1 s waits skipped (lock_get waits 20 x 1 s); the lock held by a live process
+    nos() { $TSH -c "sleep() { :; }; . \"\$WGS_MODDIR/ctl.sh\"" ctl "$@" 2>&1; }
+    sleep 120 & holder=$!
+    mkdir "$STATE/lock" && echo "$holder" > "$STATE/lock/pid"
+    out=$(nos pause 5); b="$(echo "$out" | kv ok) $([ -f "$STATE/pause_until" ] && echo yes || echo no)"
+    echo $(( $(cut -d. -f1 /proc/uptime) + 300 )) > "$STATE/pause_until"
+    out=$(nos resume); b="$b $(echo "$out" | kv ok) $([ -f "$STATE/pause_until" ] && echo yes || echo no)"
+    rm -rf "$STATE/lock"; kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
+    rm -f "$STATE/pause_until"; ctl status >/dev/null
+    check "lock busy: pause and resume refused, nothing changed" "0 no 0 yes" "$b"
+    # up: another process takes the lock while up waits for the first handshake
+    rm -f "$STATE/fake_hs"
+    sleep 120 & holder=$!
+    out=$(WGS_UP_WAIT=3 $TSH -c "sleep() { mkdir \"\$STATE/lock\" 2>/dev/null && echo $holder > \"\$STATE/lock/pid\"; :; }; . \"\$WGS_MODDIR/ctl.sh\"" ctl up wg-BE-2 2>&1)
+    rm -rf "$STATE/lock"; kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
+    check "up, the lock taken while it waits: refused with the note that the switch is saved" "0 1 wg-BE-2" "$(echo "$out" | kv ok) $(echo "$out" | grep -c '^error=busy - the change is saved') $(setting ACTIVE)"
+    ctl down >/dev/null
+fi
+
+if want resolve_nobb; then
+    echo "resolve_nobb: no busybox, or one without timeout / nslookup: host names cannot be looked up - said once in the log"
+    reset_state
+    # shellcheck disable=SC2016 # the fake's own variables
+    printf '#!/bin/sh\necho "$1: applet not found" >&2\nexit 127\n' > "$FAKES/bbnone"
+    chmod 755 "$FAKES/bbnone"
+    conf "$WGS_DL/wg-RN-1.conf" vpn.example.com:51820
+    ctl import wg-RN-1.conf >/dev/null
+    WGS_BB="$FAKES/bbnone" ctl up wg-RN-1 >/dev/null; WGS_BB="$FAKES/bbnone" ctl status >/dev/null; WGS_BB="$FAKES/bbnone" ctl status >/dev/null
+    b="$(st reason) $(grep -c "WARN.*host names cannot be looked up: the root manager's busybox (.*) has no timeout or nslookup" "$WGS_DATA/logs/wg-shield.log") $(ip rule | grep -c '^5001:')"
+    WGS_BB="$RUN/no-busybox" ctl status >/dev/null; WGS_BB="$RUN/no-busybox" ctl status >/dev/null
+    b="$b $(grep -c 'WARN.*host names cannot be looked up: no busybox of the root manager' "$WGS_DATA/logs/wg-shield.log")"
+    ctl down >/dev/null
+    check "state resolving, each reason logged once, no rule 5001 left, nothing kept after off" "resolving 1 0 1 no" "$b $([ -f "$STATE/resolve.bad" ] && echo yes || echo no)"
+fi
+
+if want restart_busy; then
+    echo "restart_busy: a restart whose lock stays busy starts the watchdog again all the same"
+    reset_state
+    conf "$WGS_DL/wg-RS-1.conf" 203.0.113.196:51820
+    ctl import wg-RS-1.conf >/dev/null; date +%s > "$STATE/fake_hs"; ctl up wg-RS-1 >/dev/null
+    WGS_FAST=1000 $TSH "$MOD/service.sh" </dev/null >/dev/null 2>&1 &
+    _n=0; while [ ! -s "$STATE/monitor.pid" ] && [ "$_n" -lt 50 ]; do sleep 0.1; _n=$((_n + 1)); done
+    wd=$(cat "$STATE/watchdog.pid" 2>/dev/null)
+    sleep 120 & holder=$!
+    _n=0; while ! { mkdir "$STATE/lock" 2>/dev/null && echo "$holder" > "$STATE/lock/pid"; } && [ "$_n" -lt 50 ]; do sleep 0.1; _n=$((_n + 1)); done
+    # its 1 s waits shortened (lock_get waits 20 x 1 s)
+    out=$($TSH -c "sleep() { command sleep 0.1; }; . \"\$WGS_MODDIR/ctl.sh\"" ctl restart 2>&1)
+    wd2=$(cat "$STATE/watchdog.pid" 2>/dev/null)
+    check "lock busy: the old watchdog stopped, a new one running, the answer says so" "0 1 no yes" "$(echo "$out" | kv ok) $(echo "$out" | grep -c '^error=busy - the watchdog runs again') $(kill -0 "$wd" 2>/dev/null && echo yes || echo no) $([ -n "$wd2" ] && [ "$wd2" != "$wd" ] && kill -0 "$wd2" 2>/dev/null && echo yes || echo no)"
+    rm -rf "$STATE/lock"; kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
+    for w in "$wd" "$wd2"; do [ -n "$w" ] && kill "$w" 2>/dev/null; done
+    _n=0; while { kill -0 "$wd2" 2>/dev/null || kill -0 "$wd" 2>/dev/null; } && [ "$_n" -lt 50 ]; do sleep 0.1; _n=$((_n + 1)); done
+    p=$(cat "$STATE/monitor.pid" 2>/dev/null); [ -n "$p" ] && kill "$p" 2>/dev/null
+    ctl down >/dev/null
+fi
+
+if want speed_moved; then
+    echo "speed_moved: a tested tunnel imported again on another server loses the old server's result"
+    reset_state
+    conf "$WGS_DL/wg-SV-1.conf" 203.0.113.197:51820; conf "$WGS_DL/wg-SV-2.conf" 203.0.113.197:51820
+    ctl import wg-SV-1.conf >/dev/null; ctl import wg-SV-2.conf >/dev/null
+    WGS_TEST_HS_MAX=2 ctl test SV >/dev/null 2>&1
+    b=$(grep -c '^203.0.113.197|.*|wg-SV-1,wg-SV-2$' "$WGS_DATA/speedtest")
+    # shellcheck disable=SC2016 # expanded by the inner shell
+    rank() { $TSH -c '. "$WGS_MODDIR/sh/common.sh"; . "$WGS_MODDIR/sh/tunnels.sh"; . "$WGS_MODDIR/sh/net.sh"; test_rank "$1"' sh "$1"; }
+    conf "$WGS_DL/wg-SV-1.conf" 203.0.113.198:51820
+    ctl import wg-SV-1.conf >/dev/null
+    b="$b $(ctl poll | grep -c '^s=203.0.113.197|.*|wg-SV-2$') $(rank wg-SV-1) $(rank wg-SV-2)"
+    # imported again on the same server (as a restore does): the result stays
+    ctl import wg-SV-2.conf >/dev/null
+    b="$b $(grep -c '^203.0.113.197|.*|wg-SV-2$' "$WGS_DATA/speedtest")"
+    conf "$WGS_DL/wg-SV-2.conf" 203.0.113.198:51820
+    ctl import wg-SV-2.conf >/dev/null
+    check "the moved tunnel untested, the other keeps the result, also imported again on its server; both moved: no line left" "1 1 50000 90000 1 0" "$b $(grep -c . "$WGS_DATA/speedtest")"
 fi
 
 echo
