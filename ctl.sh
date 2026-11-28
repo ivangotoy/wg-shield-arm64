@@ -440,18 +440,27 @@ case "$cmd" in
         # 2. a fresh tunnel interface (new port, new handshake) and a fresh
         #    recovery; the kill switch holds meanwhile (table 51820's
         #    unreachable route), a pause or "off" is kept
-        lock_get 20 || fail "busy - try again"
-        wlog INFO "ctl: restart"
-        "$IP" link del "$IFACE" 2>/dev/null
-        rm -f "$STATE/loaded" "$STATE/heal" "$STATE/rules.key" "$STATE/resolved_at" \
-              "$STATE/dead_at" "$STATE/live_probe_at" "$STATE/alive_at" "$STATE/live_paused"
-        lock_release
+        #    A lock that stays busy: nothing is rebuilt, but the watchdog is
+        #    started again all the same (it is stopped already) - without it
+        #    nothing would look after the tunnel until the next boot
+        rs_busy=0
+        if lock_get 20; then
+            wlog INFO "ctl: restart"
+            "$IP" link del "$IFACE" 2>/dev/null
+            rm -f "$STATE/loaded" "$STATE/heal" "$STATE/rules.key" "$STATE/resolved_at" \
+                  "$STATE/dead_at" "$STATE/live_probe_at" "$STATE/alive_at" "$STATE/live_paused"
+            lock_release
+        else
+            rs_busy=1
+            wlog WARN "ctl: restart - the lock stayed busy for 20 s: the tunnel is not rebuilt, the watchdog is started again"
+        fi
         # 3. a new watchdog, in its own session: it keeps running after the
         #    WebUI / terminal that started it is gone
         if command -v setsid >/dev/null 2>&1; then SS=setsid; elif [ -x "$BB" ]; then SS="$BB setsid"; else SS=""; fi
         $SS ${WGS_SH:-/system/bin/sh} "$MODDIR/service.sh" </dev/null >/dev/null 2>&1 &
         n=0; while ! watchdog_alive && [ "$n" -lt 30 ]; do sleep 0.1 2>/dev/null || sleep 1; n=$((n + 1)); done
         watchdog_alive || fail "the watchdog did not start - reboot the phone"
+        [ "$rs_busy" = 0 ] || fail "busy - the watchdog runs again, the tunnel was not rebuilt - try again"
         settings_load
         [ -n "$S_ACTIVE" ] && [ ! -f "$STATE/pause_until" ] && wait_up
         echo "restarted=1"

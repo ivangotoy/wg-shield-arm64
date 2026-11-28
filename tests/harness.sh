@@ -3170,6 +3170,27 @@ if want resolve_nobb; then
     check "state resolving, each reason logged once, no rule 5001 left, nothing kept after off" "resolving 1 0 1 no" "$b $([ -f "$STATE/resolve.bad" ] && echo yes || echo no)"
 fi
 
+if want restart_busy; then
+    echo "restart_busy: a restart whose lock stays busy starts the watchdog again all the same"
+    reset_state
+    conf "$WGS_DL/wg-RS-1.conf" 203.0.113.196:51820
+    ctl import wg-RS-1.conf >/dev/null; date +%s > "$STATE/fake_hs"; ctl up wg-RS-1 >/dev/null
+    WGS_FAST=1000 $TSH "$MOD/service.sh" </dev/null >/dev/null 2>&1 &
+    _n=0; while [ ! -s "$STATE/monitor.pid" ] && [ "$_n" -lt 50 ]; do sleep 0.1; _n=$((_n + 1)); done
+    wd=$(cat "$STATE/watchdog.pid" 2>/dev/null)
+    sleep 120 & holder=$!
+    _n=0; while ! { mkdir "$STATE/lock" 2>/dev/null && echo "$holder" > "$STATE/lock/pid"; } && [ "$_n" -lt 50 ]; do sleep 0.1; _n=$((_n + 1)); done
+    # its 1 s waits shortened (lock_get waits 20 x 1 s)
+    out=$($TSH -c "sleep() { command sleep 0.1; }; . \"\$WGS_MODDIR/ctl.sh\"" ctl restart 2>&1)
+    wd2=$(cat "$STATE/watchdog.pid" 2>/dev/null)
+    check "lock busy: the old watchdog stopped, a new one running, the answer says so" "0 1 no yes" "$(echo "$out" | kv ok) $(echo "$out" | grep -c '^error=busy - the watchdog runs again') $(kill -0 "$wd" 2>/dev/null && echo yes || echo no) $([ -n "$wd2" ] && [ "$wd2" != "$wd" ] && kill -0 "$wd2" 2>/dev/null && echo yes || echo no)"
+    rm -rf "$STATE/lock"; kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
+    for w in "$wd" "$wd2"; do [ -n "$w" ] && kill "$w" 2>/dev/null; done
+    _n=0; while { kill -0 "$wd2" 2>/dev/null || kill -0 "$wd" 2>/dev/null; } && [ "$_n" -lt 50 ]; do sleep 0.1; _n=$((_n + 1)); done
+    p=$(cat "$STATE/monitor.pid" 2>/dev/null); [ -n "$p" ] && kill "$p" 2>/dev/null
+    ctl down >/dev/null
+fi
+
 echo
 echo "passed $PASS, failed $FAILN"
 [ "$FAILN" = 0 ]
