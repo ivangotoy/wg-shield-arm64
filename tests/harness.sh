@@ -3191,6 +3191,26 @@ if want restart_busy; then
     ctl down >/dev/null
 fi
 
+if want speed_moved; then
+    echo "speed_moved: a tested tunnel imported again on another server loses the old server's result"
+    reset_state
+    conf "$WGS_DL/wg-SV-1.conf" 203.0.113.197:51820; conf "$WGS_DL/wg-SV-2.conf" 203.0.113.197:51820
+    ctl import wg-SV-1.conf >/dev/null; ctl import wg-SV-2.conf >/dev/null
+    WGS_TEST_HS_MAX=2 ctl test SV >/dev/null 2>&1
+    b=$(grep -c '^203.0.113.197|.*|wg-SV-1,wg-SV-2$' "$WGS_DATA/speedtest")
+    # shellcheck disable=SC2016 # expanded by the inner shell
+    rank() { $TSH -c '. "$WGS_MODDIR/sh/common.sh"; . "$WGS_MODDIR/sh/tunnels.sh"; . "$WGS_MODDIR/sh/net.sh"; test_rank "$1"' sh "$1"; }
+    conf "$WGS_DL/wg-SV-1.conf" 203.0.113.198:51820
+    ctl import wg-SV-1.conf >/dev/null
+    b="$b $(ctl poll | grep -c '^s=203.0.113.197|.*|wg-SV-2$') $(rank wg-SV-1) $(rank wg-SV-2)"
+    # imported again on the same server (as a restore does): the result stays
+    ctl import wg-SV-2.conf >/dev/null
+    b="$b $(grep -c '^203.0.113.197|.*|wg-SV-2$' "$WGS_DATA/speedtest")"
+    conf "$WGS_DL/wg-SV-2.conf" 203.0.113.198:51820
+    ctl import wg-SV-2.conf >/dev/null
+    check "the moved tunnel untested, the other keeps the result, also imported again on its server; both moved: no line left" "1 1 50000 90000 1 0" "$b $(grep -c . "$WGS_DATA/speedtest")"
+fi
+
 echo
 echo "passed $PASS, failed $FAILN"
 [ "$FAILN" = 0 ]

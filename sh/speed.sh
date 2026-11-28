@@ -264,6 +264,25 @@ test_run() {
     unset _sbox _sst _saa _sak _spairs _scnt _sa _sas _stot _snow _si _sres _snames _slist _spick _snew _stun _stn _ssaved
 }
 
+# test_moved NAME ADDRESS - tunnel NAME was imported with the server address
+# ADDRESS (as tun_parse gives T_EPIP): a result of another address that still
+# names it (imported again on another server) is not its own any more - the
+# name goes from that line, a line left without names goes. A host-name
+# tunnel (no ADDRESS) keeps its result: its address is known only once it
+# is looked up. Not while a test runs: it writes the file when it ends
+test_moved() {
+    [ -n "$2" ] && [ -f "$TEST_FILE" ] || return 0
+    test_running && return 0
+    awk -F'|' -v n="$1" -v a="$2" 'NF >= 6 && $1 != a { m = split($6, x, ","); for (i = 1; i <= m; i++) if (x[i] == n) f = 1 } END { exit !f }' "$TEST_FILE" || return 0
+    awk -F'|' -v n="$1" -v a="$2" 'BEGIN { OFS = "|" }
+        NF >= 6 && $1 != a { m = split($6, x, ","); k = ""
+            for (i = 1; i <= m; i++) if (x[i] != n) k = k (k == "" ? "" : ",") x[i]
+            if (k == "") next
+            $6 = k }
+        { print }' "$TEST_FILE" > "$TEST_FILE.tmp.$$" && chmod 600 "$TEST_FILE.tmp.$$" && mv -f "$TEST_FILE.tmp.$$" "$TEST_FILE"
+    [ ! -e "$TEST_FILE.tmp.$$" ] || rm -f "$TEST_FILE.tmp.$$"
+}
+
 # poll rows: s=address|handshake ms|ping ms|status|age s|names
 test_rows() {
     [ -f "$TEST_FILE" ] || return 0
