@@ -189,14 +189,18 @@ print_status() {
     if [ -f "$STATE/status" ]; then echo "ok=1"; cat "$STATE/status"; else fail "no status yet"; fi
 }
 
-# after "up": give the first handshake a few seconds
+# after "up": give the first handshake a few seconds - WGS_UP_WAIT ticks, and
+# no longer than WGS_UP_WAIT s in all: a tick can be slow (a host-name lookup
+# that gets no answer takes up to 18 s), and the WebUI waits 30 s for "up"
 wait_up() {
-    n=0
+    n=0; _wut=$(mono_cs)
     while [ "$n" -lt "${WGS_UP_WAIT:-6}" ]; do
         tick_now
         case "$(sed -n 's/^state=//p' "$STATE/status" 2>/dev/null)" in handshaking) : ;; *) break ;; esac
+        [ $(( $(mono_cs) - _wut )) -lt $(( ${WGS_UP_WAIT:-6} * 100 )) ] || break
         sleep 1; n=$((n + 1))
     done
+    unset _wut
 }
 
 cmd=$1; [ $# -gt 0 ] && shift

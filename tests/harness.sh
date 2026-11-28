@@ -3110,6 +3110,21 @@ if want resolve_once; then
     ctl down >/dev/null
 fi
 
+if want upwait_slow; then
+    echo "upwait_slow: up waits for the first handshake by time, not by ticks: a host-name tunnel whose lookups get no answer"
+    reset_state
+    UW="$RUN/upwait.log"; rm -f "$UW"
+    # every lookup takes 1 s and gets no answer: one tick of three lookups is longer than the wait (2 s here)
+    # shellcheck disable=SC2016 # the fake's own variables
+    printf '#!/bin/sh\ncase "$1" in timeout) shift 2; exec "$@" ;; nslookup) echo "$3" >> "%s"; sleep 1; exit 1 ;; *) exit 127 ;; esac\n' "$UW" > "$FAKES/bbslow"
+    chmod 755 "$FAKES/bbslow"
+    conf "$WGS_DL/wg-UW-1.conf" vpn.example.com:51820
+    ctl import wg-UW-1.conf >/dev/null
+    out=$(WGS_BB="$FAKES/bbslow" WGS_UP_WAIT=2 ctl up wg-UW-1 2>&1)
+    check "one tick of lookups (3), then the answer: ok, connecting, looking the name up" "3 1 handshaking resolving" "$(grep -c . "$UW") $(echo "$out" | kv ok) $(echo "$out" | sed -n 's/^state=//p') $(echo "$out" | sed -n 's/^reason=//p')"
+    ctl down >/dev/null
+fi
+
 echo
 echo "passed $PASS, failed $FAILN"
 [ "$FAILN" = 0 ]
