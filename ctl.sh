@@ -35,6 +35,7 @@ usage() {
         '  set profile battery|always  checks only with the screen on (default) / day and night' \
         '  set checks 5|30|off  ping through the tunnel every 5 s / 30 s (default) / never' \
         '  set landns 0|1      1 = while the tunnel is up, DNS to a resolver on the Wi-Fi (the router) goes to the tunnel DNS too' \
+        '  set gpay 0|1        1 = Google Pay: Play services reaches the Google payment server around the tunnel (default)' \
         '  restart             restart the watchdog and reconnect the tunnel' \
         '  notifytest          show a test notification' \
         '  log [lines|clear]   last log lines (default 40) / empty the log' \
@@ -58,9 +59,11 @@ ctl_lock() { lock_get 20 || fail "busy - try again"; }
 # caller ticks and releases)
 set_locked() {
     ctl_lock; settings_load
+    # shellcheck disable=SC2034 # the S_* are saved by settings_save (sh/common.sh)
     case "$1" in
         KILLSWITCH) S_KILLSWITCH=$2 ;; AUTOSWITCH) S_AUTOSWITCH=$2 ;; NOTIFY) S_NOTIFY=$2 ;;
         PROFILE) S_PROFILE=$2 ;; CHECKS) S_CHECKS=$2 ;; LANDNS) S_LANDNS=$2 ;; KS_ERROR) S_KS_ERROR=$2 ;;
+        GPAY) S_GPAY=$2 ;;
     esac
     settings_save || fail "cannot write $CONF"
 }
@@ -175,9 +178,11 @@ route_dev() {
     echo "${_d:-blocked}"
 }
 
-# run one tick now under the lock (the watchdog does the same every 10 s)
+# run one tick now under the lock (the watchdog does the same every 10 s),
+# after a change that is saved already (up, resume): a lock that stays busy
+# does not undo it - the watchdog applies it at its next check
 tick_now() {
-    lock_get 20 || fail "busy - try again"
+    lock_get 20 || fail "busy - the change is saved, the watchdog applies it at its next check"
     wgs_tick
     lock_release
 }
@@ -186,14 +191,18 @@ print_status() {
     if [ -f "$STATE/status" ]; then echo "ok=1"; cat "$STATE/status"; else fail "no status yet"; fi
 }
 
-# after "up": give the first handshake a few seconds
+# after "up": give the first handshake a few seconds - WGS_UP_WAIT ticks, and
+# no longer than WGS_UP_WAIT s in all: a tick can be slow (a host-name lookup
+# that gets no answer takes up to 18 s), and the WebUI waits 30 s for "up"
 wait_up() {
-    n=0
+    n=0; _wut=$(mono_cs)
     while [ "$n" -lt "${WGS_UP_WAIT:-6}" ]; do
         tick_now
         case "$(sed -n 's/^state=//p' "$STATE/status" 2>/dev/null)" in handshaking) : ;; *) break ;; esac
+        [ $(( $(mono_cs) - _wut )) -lt $(( ${WGS_UP_WAIT:-6} * 100 )) ] || break
         sleep 1; n=$((n + 1))
     done
+    unset _wut
 }
 
 cmd=$1; [ $# -gt 0 ] && shift
@@ -354,14 +363,18 @@ case "$cmd" in
         # without leading zeros: bash and busybox ash read 010 as octal, 08 as an error
         m=${1#"${1%%[!0]*}"}; m=${m:-0}
         [ "$m" -ge 1 ] && [ "$m" -le 1440 ] || fail "minutes must be 1-1440"
+        # under the lock, as every change: "busy" then means nothing changed
+        ctl_lock
         settings_load; [ -n "$S_ACTIVE" ] || fail "tunnel is off - nothing to pause"
         echo $(( $(mono_now) + m * 60 )) > "$STATE/pause_until"
         wlog INFO "ctl: pause $m min"
-        tick_now; print_status
+        tick_locked; print_status
         ;;
     resume)
+        ctl_lock
         rm -f "$STATE/pause_until" "$STATE/heal"
         wlog INFO "ctl: resume"
+        lock_release
         wait_up; print_status
         ;;
     set)
@@ -405,6 +418,11 @@ case "$cmd" in
                 set_locked LANDNS "$2"
                 wlog INFO "ctl: LAN DNS through the tunnel $2"
                 tick_locked; print_status ;;
+            gpay|GPAY)
+                case "$2" in 0|1) : ;; *) fail "usage: set gpay 0|1" ;; esac
+                set_locked GPAY "$2"
+                wlog INFO "ctl: Google Pay around the tunnel $2"
+                tick_locked; print_status ;;
             *) fail "unknown setting: $1" ;;
         esac
         ;;
@@ -422,18 +440,27 @@ case "$cmd" in
         # 2. a fresh tunnel interface (new port, new handshake) and a fresh
         #    recovery; the kill switch holds meanwhile (table 51820's
         #    unreachable route), a pause or "off" is kept
-        lock_get 20 || fail "busy - try again"
-        wlog INFO "ctl: restart"
-        "$IP" link del "$IFACE" 2>/dev/null
-        rm -f "$STATE/loaded" "$STATE/heal" "$STATE/rules.key" "$STATE/resolved_at" \
-              "$STATE/dead_at" "$STATE/live_probe_at" "$STATE/alive_at" "$STATE/live_paused"
-        lock_release
+        #    A lock that stays busy: nothing is rebuilt, but the watchdog is
+        #    started again all the same (it is stopped already) - without it
+        #    nothing would look after the tunnel until the next boot
+        rs_busy=0
+        if lock_get 20; then
+            wlog INFO "ctl: restart"
+            "$IP" link del "$IFACE" 2>/dev/null
+            rm -f "$STATE/loaded" "$STATE/heal" "$STATE/rules.key" "$STATE/resolved_at" \
+                  "$STATE/dead_at" "$STATE/live_probe_at" "$STATE/alive_at" "$STATE/live_paused"
+            lock_release
+        else
+            rs_busy=1
+            wlog WARN "ctl: restart - the lock stayed busy for 20 s: the tunnel is not rebuilt, the watchdog is started again"
+        fi
         # 3. a new watchdog, in its own session: it keeps running after the
         #    WebUI / terminal that started it is gone
         if command -v setsid >/dev/null 2>&1; then SS=setsid; elif [ -x "$BB" ]; then SS="$BB setsid"; else SS=""; fi
         $SS ${WGS_SH:-/system/bin/sh} "$MODDIR/service.sh" </dev/null >/dev/null 2>&1 &
         n=0; while ! watchdog_alive && [ "$n" -lt 30 ]; do sleep 0.1 2>/dev/null || sleep 1; n=$((n + 1)); done
         watchdog_alive || fail "the watchdog did not start - reboot the phone"
+        [ "$rs_busy" = 0 ] || fail "busy - the watchdog runs again, the tunnel was not rebuilt - try again"
         settings_load
         [ -n "$S_ACTIVE" ] && [ ! -f "$STATE/pause_until" ] && wait_up
         echo "restarted=1"
