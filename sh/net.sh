@@ -3,6 +3,8 @@
 # Our ip rules sit before netd's (prefs 5000-5021, netd starts at 10000):
 #   5000  iif lo to <endpoint>/32          lookup <default net table>   tunnel's own UDP
 #         (an IPv6 endpoint: the same rule in the IPv6 rules, to <endpoint>/128)
+#   5001  iif lo to <resolver>/32 uidrange 0-0 dport 53 lookup <default net table>
+#         only while resolve_host looks a host-name endpoint up (seconds)
 #   5010  iif lo lookup local_network suppress_prefixlength 0            hotspot / local
 #   5011  iif lo lookup <default>_local suppress_prefixlength 0          LAN (only while an Android VPN exists)
 #   5012  iif lo lookup <default table> suppress_prefixlength 0          LAN, gateway

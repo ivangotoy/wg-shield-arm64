@@ -73,6 +73,7 @@ your Wi-Fi or mobile network → VPN server → internet
 | Rule | What for |
 |---|---|
 | 5000 | The tunnel's own encrypted packets to the server go out through your network |
+| 5001 | Only while a host-name server is looked up (a few seconds): root's DNS query to the resolver goes out through your network |
 | 5010–5013 | Local destinations stay local: Wi-Fi LAN, hotspot devices, the local range of every other network |
 | 5014 | Android's own network check (NetworkStack) and the captive portal login page stay on the network they are for |
 | 5015 | Google Pay: Google Play services' connections to the addresses of Google's payment server go out through your network (setting *Google Pay around the tunnel*); also while the kill switch blocks |

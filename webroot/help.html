@@ -157,6 +157,7 @@
   <div class="tw"><table>
     <tr class="th-row"><th>rule</th><th>what for</th></tr>
     <tr><td>5000</td><td>The tunnel's own encrypted packets to the server go out through your network.</td></tr>
+    <tr><td>5001</td><td>Only while a host-name server is looked up (a few seconds): root's DNS query to the resolver goes out through your network (see 9).</td></tr>
     <tr><td>5010–5013</td><td>Local destinations stay local: your Wi-Fi LAN (router, printer, SSH from a laptop), hotspot devices, the local range of every other network.</td></tr>
     <tr><td>5014</td><td>Android's own network check and the hotel / airport login page stay on the network they are for.</td></tr>
     <tr><td>5015</td><td>Google Pay: Google Play services' connections to the addresses of Google's payment server go out on your network, because that server refuses payments from a VPN server - also while the kill switch blocks (see 7). Off in Settings, or <code>ctl.sh set gpay 0</code>.</td></tr>
