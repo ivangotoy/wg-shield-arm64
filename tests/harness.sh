@@ -3041,6 +3041,33 @@ if want stale5001; then
     ctl down >/dev/null
 fi
 
+if want wd_term; then
+    echo "wd_term: the watchdog stopped (TERM, as ctl.sh restart does) during a Google Pay lookup leaves no ping and no temp file"
+    reset_state
+    printf '#!/bin/sh\necho "package:com.google.android.gms uid:10123"\n' > "$FAKES/pm-wt"
+    # a lookup that hangs: the ping notes its pid, then waits
+    printf '#!/bin/sh\necho $$ > "%s"\nexec sleep 30\n' "$RUN/wt.pid" > "$FAKES/ping-wt"
+    chmod 755 "$FAKES/pm-wt" "$FAKES/ping-wt"
+    conf "$WGS_DL/wg-WT-1.conf" 203.0.113.171:51820
+    ctl import wg-WT-1.conf >/dev/null
+    date +%s > "$STATE/fake_hs"
+    WGS_PM="$FAKES/pm-wt" WGS_PING="$FAKES/ping-wt" WGS_GPAY_WAIT=1 ctl up wg-WT-1 >/dev/null
+    rm -f "$STATE/gpay_at" "$RUN/wt.pid"
+    WGS_PM="$FAKES/pm-wt" WGS_PING="$FAKES/ping-wt" WGS_GPAY_WAIT=20 WGS_FAST=1000 $TSH "$MOD/service.sh" </dev/null >/dev/null 2>&1 &
+    _n=0; while [ ! -s "$RUN/wt.pid" ] && [ "$_n" -lt 100 ]; do sleep 0.1; _n=$((_n + 1)); done
+    wd=$(cat "$STATE/watchdog.pid" 2>/dev/null)
+    b="$(find "$STATE" -maxdepth 1 -name "gpay.out.tmp.$wd" | grep -c .)"
+    kill "$wd" 2>/dev/null
+    _n=0; while kill -0 "$wd" 2>/dev/null && [ "$_n" -lt 50 ]; do sleep 0.1; _n=$((_n + 1)); done
+    sleep 0.3
+    pp=$(cat "$RUN/wt.pid" 2>/dev/null)
+    check "watchdog gone, its lookup's ping stopped, no temp file of it, lock and network watch released" "1 no no 0 no no" \
+        "$b $(kill -0 "$wd" 2>/dev/null && echo yes || echo no) $([ -n "$pp" ] && kill -0 "$pp" 2>/dev/null && echo yes || echo no) $(find "$STATE" -maxdepth 1 -name "*.$wd" | grep -c .) $([ -d "$STATE/lock" ] && echo yes || echo no) $([ -f "$STATE/monitor.pid" ] && echo yes || echo no)"
+    [ -n "$pp" ] && kill "$pp" 2>/dev/null
+    p=$(cat "$STATE/monitor.pid" 2>/dev/null); [ -n "$p" ] && kill "$p" 2>/dev/null
+    ctl down >/dev/null
+fi
+
 echo
 echo "passed $PASS, failed $FAILN"
 [ "$FAILN" = 0 ]
