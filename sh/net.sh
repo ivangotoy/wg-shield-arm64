@@ -580,8 +580,16 @@ resolvers_now() {
 # gets RESOLVE_ROUND s, 6 s per resolver for three of them, shared out when
 # there are more (five with an old DNSCrypt Proxy: 3 s each)
 RESOLVE_ROUND=18
+# resolve_bad WHY - no lookup can run at all: said once in the log
+# ($STATE/resolve.bad holds the reason; teardown and boot remove it)
+resolve_bad() {
+    [ "$(cat "$STATE/resolve.bad" 2>/dev/null)" = "$1" ] && return 0
+    printf '%s\n' "$1" > "$STATE/resolve.bad"
+    wlog WARN "host names cannot be looked up: $1 - a tunnel with a host-name server cannot connect (write the server's address in its Endpoint instead)"
+}
 resolve_host() {
     [ -n "$DEF" ] || return 1
+    [ -x "$BB" ] || { resolve_bad "no busybox of the root manager ($BB)"; return 1; }
     _rs=$(resolvers_now); _rn=0
     for srv in $_rs; do _rn=$((_rn + 1)); done
     _rt=$(( RESOLVE_ROUND / (_rn > 0 ? _rn : 1) )); [ "$_rt" -le 6 ] || _rt=6; [ "$_rt" -ge 1 ] || _rt=1
@@ -594,15 +602,22 @@ resolve_host() {
         "$IP" rule add pref 5001 iif lo to "$srv/32" uidrange 0-0 dport 53 lookup "$DEFN" 2>/dev/null ||
             "$IP" rule add pref 5001 iif lo to "$srv/32" uidrange 0-0 lookup "$DEFN" 2>/dev/null ||
             "$IP" rule add pref 5001 iif lo to "$srv/32" lookup "$DEFN" 2>/dev/null
-        out=$("$BB" timeout "$_rt" "$BB" nslookup "$1" "$srv" 2>/dev/null)
+        out=$("$BB" timeout "$_rt" "$BB" nslookup "$1" "$srv" 2>/dev/null); _rr=$?
         while "$IP" rule del pref 5001 2>/dev/null; do :; done
+        # 127: the busybox has no timeout or no nslookup applet (a lookup
+        # that ran gives 0, 1, or 143 when timeout stopped it)
+        if [ "$_rr" = 127 ]; then
+            resolve_bad "the root manager's busybox ($BB) has no timeout or nslookup"
+            unset _rs _rn _rt _rr; return 1
+        fi
+        rm -f "$STATE/resolve.bad"
         a=$(printf '%s\n' "$out" | awk '
             /^Name:/ { n = 1; next }
             n { for (i = 1; i <= NF; i++) { f = $i; sub(/:53$/, "", f)
                 if (f ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) { print f; exit } } }')
-        [ -n "$a" ] && { echo "$a"; unset _rs _rn _rt; return 0; }
+        [ -n "$a" ] && { echo "$a"; unset _rs _rn _rt _rr; return 0; }
     done
-    unset _rs _rn _rt
+    unset _rs _rn _rt _rr
     return 1
 }
 
@@ -1066,7 +1081,7 @@ teardown() {
     "$IP" route flush table "$TABLE" 2>/dev/null
     "$IP" -6 route flush table "$TABLE" 2>/dev/null
     "$IP" link del "$IFACE" 2>/dev/null
-    rm -f "$STATE/dns.bad" "$STATE/dns6.bad" "$STATE/dns6b.bad"
+    rm -f "$STATE/dns.bad" "$STATE/dns6.bad" "$STATE/dns6b.bad" "$STATE/resolve.bad"
     rm -f "$STATE/loaded" "$STATE/tunnel.info" "$STATE/rules.key" "$STATE/rules.sig" "$STATE/up_since" "$STATE/resolved_at" "$STATE/iftype" "$STATE/last_nets" "$STATE/rules.want" "$STATE/rules.bad" "$STATE/rules.fast" "$STATE/rules.dirty" "$STATE/dead_at" "$STATE/live_probe_at" "$STATE/alive_at" "$STATE/live_paused" "$STATE/dns_srv" "$STATE/dns_fo_fail"
 }
 

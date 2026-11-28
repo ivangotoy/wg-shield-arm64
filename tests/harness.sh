@@ -3152,6 +3152,22 @@ if want busy_effect; then
     ctl down >/dev/null
 fi
 
+if want resolve_nobb; then
+    echo "resolve_nobb: no busybox, or one without timeout / nslookup: host names cannot be looked up - said once in the log"
+    reset_state
+    # shellcheck disable=SC2016 # the fake's own variables
+    printf '#!/bin/sh\necho "$1: applet not found" >&2\nexit 127\n' > "$FAKES/bbnone"
+    chmod 755 "$FAKES/bbnone"
+    conf "$WGS_DL/wg-RN-1.conf" vpn.example.com:51820
+    ctl import wg-RN-1.conf >/dev/null
+    WGS_BB="$FAKES/bbnone" ctl up wg-RN-1 >/dev/null; WGS_BB="$FAKES/bbnone" ctl status >/dev/null; WGS_BB="$FAKES/bbnone" ctl status >/dev/null
+    b="$(st reason) $(grep -c "WARN.*host names cannot be looked up: the root manager's busybox (.*) has no timeout or nslookup" "$WGS_DATA/logs/wg-shield.log") $(ip rule | grep -c '^5001:')"
+    WGS_BB="$RUN/no-busybox" ctl status >/dev/null; WGS_BB="$RUN/no-busybox" ctl status >/dev/null
+    b="$b $(grep -c 'WARN.*host names cannot be looked up: no busybox of the root manager' "$WGS_DATA/logs/wg-shield.log")"
+    ctl down >/dev/null
+    check "state resolving, each reason logged once, no rule 5001 left, nothing kept after off" "resolving 1 0 1 no" "$b $([ -f "$STATE/resolve.bad" ] && echo yes || echo no)"
+fi
+
 echo
 echo "passed $PASS, failed $FAILN"
 [ "$FAILN" = 0 ]
