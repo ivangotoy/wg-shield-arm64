@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased
+
+* **Google Pay works with the tunnel on** - Google's payment server refused Play services' requests from a VPN server ("Request Failed"). Only Google Play services' connections to `payments-pa.googleapis.com` now go out directly (rule 5015); everything else stays in the tunnel. The addresses are looked up through Android's resolver and kept for 24 hours. On by default; turn it off in Settings or with `ctl.sh set gpay 0` (status key `gpay=`)
+* **Google Pay: the address lookup needs no busybox `timeout`** and cannot hold the watchdog's lock for long; a round of lookups shares a 6 s deadline
+* **Google Pay: Play services installed later is found** - "not installed" is asked again every 10 minutes instead of only at boot
+* **Google Pay: IPv4 and IPv6 lookups** ask ping for the right address family; on an IPv6 tunnel over a network without IPv6, Play services' IPv6 to those addresses is refused so it takes IPv4
+* **Google Pay: the 24-hour window also holds while no lookup runs** (tunnel down or screen off)
+* **No rule 5001 of a killed host-name lookup stays behind** - the next check removes it
+* **Restart during a lookup leaves nothing running** - the watchdog stops the lookup's ping, removes its temp files and releases the lock when it gets a TERM
+* **A host-name lookup round stays within 18 seconds**, shared among the resolvers, so commands no longer answer *busy - try again* while resolvers do not answer
+* **One round of host-name lookups per check** - a failed lookup is not repeated in the same check
+* **Switching on a host-name tunnel waits one round of lookups, not six** - `up`, *Resume* and *Restart* stop waiting for the first handshake after 6 seconds too
+* **Pause and Resume wait for the lock first**, so *busy* means nothing changed; a saved switch or resume says the watchdog applies it at its next check
+* **A restart that finds the module busy starts the watchdog again** and says the tunnel was not rebuilt
+* **The log says why a host name cannot be looked up** (no busybox, or no `nslookup` / `timeout` applet)
+* **Speed test: a server's result counts for all its tunnels**, also when only some of them were in the tested box
+* **Speed test: the results merge reads a file without a final line break**
+* **Speed test: two tests started at the same moment no longer run together** - a lock without its pid yet counts as busy
+* **Speed test: the log says when a host name was not looked up** because the lock was busy
+* **Speed test: a tunnel imported again on another server** drops its old result
+* **WebUI: a speed test of a big box is not reported as failed** - the page waits about a minute per tunnel, at least 5 minutes
+* README and Help: what Google Pay around the tunnel sends outside the tunnel, the speed test's DNS lookup, *Check every: Off* (Google Pay's lookup still pings), and rule 5001 in the rule tables
+* Test harness: cases for the changes above; `landns6` runs where the host cannot load netfilter extensions
+
+---
+
 ## 2.9.4
 
 One phone Back leaves Help.
