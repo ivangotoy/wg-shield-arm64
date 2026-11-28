@@ -3103,9 +3103,10 @@ if want resolve_once; then
     b="$(st state) $(st endpoint)"
     echo 0 > "$STATE/resolved_at"; echo $(( $(date +%s) - 600 )) > "$STATE/fake_hs"
     WGS_BB="$FAKES/bbno" ctl status >/dev/null
-    c=$(grep -c . "$RO"); : > "$RO"
+    # the step right after that tick (the next tick may already make the second restart)
+    c="$(grep -c . "$RO") $(st recover)"; : > "$RO"
     WGS_BB="$FAKES/bbno" ctl status >/dev/null
-    check "one tick: 3 lookups (not 6), the restart still made; the next tick asks again" "up 203.0.113.80:51820 3 restart 1/2 3" "$b $c $(st recover) $(grep -c . "$RO")"
+    check "one tick: 3 lookups (not 6), the restart still made; the next tick asks again" "up 203.0.113.80:51820 3 restart 1/2 3" "$b $c $(grep -c . "$RO")"
     ctl down >/dev/null
 fi
 
