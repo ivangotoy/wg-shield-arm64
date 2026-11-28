@@ -576,9 +576,16 @@ resolvers_now() {
     esac
     unset _rd _rc
 }
+# A round of lookups runs under the lock, which ctl.sh waits 20 s for: it
+# gets RESOLVE_ROUND s, 6 s per resolver for three of them, shared out when
+# there are more (five with an old DNSCrypt Proxy: 3 s each)
+RESOLVE_ROUND=18
 resolve_host() {
     [ -n "$DEF" ] || return 1
-    for srv in $(resolvers_now); do
+    _rs=$(resolvers_now); _rn=0
+    for srv in $_rs; do _rn=$((_rn + 1)); done
+    _rt=$(( RESOLVE_ROUND / (_rn > 0 ? _rn : 1) )); [ "$_rt" -le 6 ] || _rt=6; [ "$_rt" -ge 1 ] || _rt=1
+    for srv in $_rs; do
         # only root's DNS query (uid 0, port 53) goes around the tunnel: an
         # app talking to the same address (1.1.1.1 and 8.8.8.8 are DoT / DoH
         # servers too) stays in it meanwhile. An ip that does not know
@@ -587,14 +594,15 @@ resolve_host() {
         "$IP" rule add pref 5001 iif lo to "$srv/32" uidrange 0-0 dport 53 lookup "$DEFN" 2>/dev/null ||
             "$IP" rule add pref 5001 iif lo to "$srv/32" uidrange 0-0 lookup "$DEFN" 2>/dev/null ||
             "$IP" rule add pref 5001 iif lo to "$srv/32" lookup "$DEFN" 2>/dev/null
-        out=$("$BB" timeout 6 "$BB" nslookup "$1" "$srv" 2>/dev/null)
+        out=$("$BB" timeout "$_rt" "$BB" nslookup "$1" "$srv" 2>/dev/null)
         while "$IP" rule del pref 5001 2>/dev/null; do :; done
         a=$(printf '%s\n' "$out" | awk '
             /^Name:/ { n = 1; next }
             n { for (i = 1; i <= NF; i++) { f = $i; sub(/:53$/, "", f)
                 if (f ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) { print f; exit } } }')
-        [ -n "$a" ] && { echo "$a"; return 0; }
+        [ -n "$a" ] && { echo "$a"; unset _rs _rn _rt; return 0; }
     done
+    unset _rs _rn _rt
     return 1
 }
 

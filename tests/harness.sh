@@ -3068,6 +3068,25 @@ if want wd_term; then
     ctl down >/dev/null
 fi
 
+if want resolve_budget; then
+    echo "resolve_budget: a host-name lookup round stays within 18 s under the lock (6 s per resolver, shared out among five)"
+    reset_state
+    RB="$RUN/rbudget.log"; rm -f "$RB"
+    # busybox that notes the timeout of every lookup; no resolver answers
+    # shellcheck disable=SC2016 # the fake's own variables
+    printf '#!/bin/sh\ncase "$1" in timeout) echo "$2" >> "%s"; shift 2; exec "$@" ;; nslookup) exit 1 ;; *) exit 127 ;; esac\n' "$RB" > "$FAKES/bbt"
+    chmod 755 "$FAKES/bbt"
+    conf "$WGS_DL/wg-RG-1.conf" vpn.example.com:51820
+    ctl import wg-RG-1.conf >/dev/null
+    # DNSCrypt Proxy before 2.1.20-r4: Quad9 first, then the three others
+    mkdir -p "$WGS_MODULES/dnscrypt-proxy-android"; printf '%s\n' id=dnscrypt-proxy-android versionCode=50 > "$WGS_MODULES/dnscrypt-proxy-android/module.prop"
+    WGS_BB="$FAKES/bbt" ctl up wg-RG-1 >/dev/null
+    b=$(tr '\n' ' ' < "$RB"); rm -rf "$WGS_MODULES/dnscrypt-proxy-android"; : > "$RB"
+    WGS_BB="$FAKES/bbt" ctl status >/dev/null
+    check "five resolvers: 3 s each; three: 6 s each" "3 3 3 3 3 |6 6 6 |resolving" "$b|$(tr '\n' ' ' < "$RB")|$(st reason)"
+    ctl down >/dev/null
+fi
+
 echo
 echo "passed $PASS, failed $FAILN"
 [ "$FAILN" = 0 ]
